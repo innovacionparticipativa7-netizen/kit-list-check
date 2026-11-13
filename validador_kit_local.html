@@ -5,312 +5,210 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Validador de Kit List</title>
 <style>
-  :root{
-    --bg:#f4f5f7; --card:#fff; --ink:#1b1f24; --muted:#6b7280; --line:#e3e6ea;
-    --ok:#0f8a4b; --okbg:#e6f6ee; --bad:#c62828; --badbg:#fdecec; --warn:#a15c00; --warnbg:#fff4e0;
-    --accent:#1f4fd1;
-  }
   *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);font-size:16px}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f4f5f7;color:#1b1f24}
   header{background:#111827;color:#fff;padding:14px 16px}
   header h1{margin:0;font-size:18px}
-  header p{margin:4px 0 0;font-size:13px;color:#cbd5e1}
   main{max-width:640px;margin:0 auto;padding:12px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
-  .step{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:16px}
-  .num{background:var(--accent);color:#fff;border-radius:50%;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;font-size:14px;flex:none}
-  .btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:14px;border-radius:10px;border:0;background:var(--accent);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
-  .btn.sec{background:#eef2ff;color:var(--accent)}
-  .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);font-weight:500;padding:10px}
-  .btn:disabled{opacity:.5}
-  input[type=file]{display:none}
-  .status{font-size:14px;color:var(--muted);margin-top:8px;min-height:18px}
-  .meta{font-size:13px;color:var(--muted);margin-bottom:8px}
-  table{width:100%;border-collapse:collapse;font-size:14px}
-  th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 4px;border-bottom:1px solid var(--line)}
-  td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:top}
-  td input{width:100%;font-size:14px;padding:6px;border:1px solid var(--line);border-radius:6px;font-family:ui-monospace,Menlo,monospace}
-  .banner{border-radius:12px;padding:16px;text-align:center;font-weight:800;font-size:22px;margin-bottom:12px}
+  .card{background:#fff;border:1px solid #e3e6ea;border-radius:12px;padding:14px;margin-bottom:12px}
+  h2{font-size:16px;margin:0 0 10px}
+  .btn{display:block;width:100%;padding:14px;border-radius:10px;border:0;background:#1f4fd1;color:#fff;font-size:16px;font-weight:600;margin-top:8px;cursor:pointer}
+  .btn.gray{background:#374151}
+  .btn.light{background:#eef2ff;color:#1f4fd1}
+  .btn.green{background:#0f8a4b}
+  .hidden{display:none!important}
+  #reader{width:100%;border-radius:10px;overflow:hidden;background:#000;margin-top:10px}
+  .banner{border-radius:12px;padding:16px;text-align:center;font-weight:800;font-size:22px}
   .banner small{display:block;font-weight:500;font-size:14px;margin-top:4px}
-  .ok{background:var(--okbg);color:var(--ok)} .bad{background:var(--badbg);color:var(--bad)} .warn{background:var(--warnbg);color:var(--warn)}
-  .piece{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;display:grid;grid-template-columns:72px 1fr;gap:10px}
-  .piece img{width:72px;height:72px;object-fit:cover;border-radius:8px;background:#eee}
-  .piece .fields{display:grid;grid-template-columns:1fr 1fr 64px;gap:6px}
-  .piece label{font-size:11px;color:var(--muted)}
-  .piece input{width:100%;font-size:14px;padding:6px;border:1px solid var(--line);border-radius:6px;font-family:ui-monospace,Menlo,monospace}
-  .verdict{grid-column:1 / -1;border-radius:8px;padding:8px 10px;font-weight:600;font-size:14px}
-  .rm{background:none;border:0;color:var(--muted);font-size:13px;text-decoration:underline;padding:0;cursor:pointer}
-  .pill{display:inline-block;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:700}
-  .hidden{display:none}
-  .row-flex{display:flex;gap:8px}
-  .row-flex .btn{flex:1}
-  .note{font-size:12px;color:var(--muted)}
+  .ok{background:#e6f6ee;color:#0f8a4b}.bad{background:#fdecec;color:#c62828}.warn{background:#fff4e0;color:#a15c00}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:#6b7280;font-size:12px;padding:6px 4px;border-bottom:1px solid #e3e6ea}
+  td{padding:7px 4px;border-bottom:1px solid #e3e6ea;font-family:ui-monospace,Menlo,monospace}
+  .pill{border-radius:999px;padding:2px 8px;font-size:12px;font-weight:700;font-family:system-ui}
+  .scan{border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:14px}
+  .meta{font-size:13px;color:#6b7280;margin-bottom:8px}
+  .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);padding:12px 18px;border-radius:10px;font-weight:700;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:9}
+  input{width:100%;font-size:15px;padding:10px;border:1px solid #e3e6ea;border-radius:8px;font-family:ui-monospace,Menlo,monospace}
 </style>
 </head>
 <body>
-<header>
-  <h1>Validador de Kit List</h1>
-  <p>Foto de la lista + foto de cada pieza → ¿coincide o no coincide? La lectura se hace en el teléfono.</p>
-</header>
+<header><h1>Validador de Kit List · QR + Data Matrix</h1></header>
 <main>
-  <div id="unavailable" class="card bad hidden">No se pudo cargar el lector de texto. Se necesita internet la primera vez que se abre la página.</div>
+  <div class="card">
+    <button class="btn" id="startBtn">📷 Abrir cámara</button>
+    <button class="btn gray hidden" id="stopBtn">⏹ Cerrar cámara</button>
+    <div id="reader" class="hidden"></div>
+    <p class="meta" style="margin-top:10px">1) Apunta al <b>QR del Kit List</b>. 2) Apunta al <b>Data Matrix</b> de cada pieza. Se detecta y guarda solo.</p>
+    <input id="manual" placeholder="O escribe el código y presiona Enter">
+  </div>
 
-  <section class="card">
-    <h2 class="step"><span class="num">1</span> Foto del Kit List</h2>
-    <label class="btn" id="kitBtn" for="kitInput">📄 Tomar foto del Kit List</label>
-    <input id="kitInput" type="file" accept="image/*" capture="environment">
-    <div class="status" id="kitStatus"></div>
-    <div id="kitWrap" class="hidden">
-      <div class="meta" id="kitMeta"></div>
-      <table>
-        <thead><tr><th>Material</th><th>Lote</th><th>Rev</th><th>Estado</th></tr></thead>
-        <tbody id="kitBody"></tbody>
-      </table>
-      <p class="note">Puedes corregir cualquier valor si se leyó mal.</p>
-    </div>
-  </section>
+  <div class="card"><div id="banner" class="banner warn">Escanea el QR del Kit List</div></div>
 
-  <section class="card">
-    <h2 class="step"><span class="num">2</span> Foto de cada pieza (sello / etiqueta)</h2>
-    <label class="btn" id="pieceBtn" for="pieceInput">📷 Tomar foto de pieza</label>
-    <input id="pieceInput" type="file" accept="image/*" capture="environment">
-    <div style="height:8px"></div>
-    <label class="btn sec" for="pieceMulti">🖼️ Elegir varias fotos de la galería</label>
-    <input id="pieceMulti" type="file" accept="image/*" multiple>
-    <div class="status" id="pieceStatus"></div>
-    <div id="pieces" style="margin-top:10px"></div>
-  </section>
+  <div class="card hidden" id="kitCard">
+    <h2>Kit List</h2>
+    <div class="meta" id="kitMeta"></div>
+    <table><thead><tr><th>Material</th><th>Lote</th><th>Rev</th><th>Cant</th><th>Estado</th></tr></thead><tbody id="kitBody"></tbody></table>
+  </div>
 
-  <section class="card">
-    <h2 class="step"><span class="num">3</span> Resultado</h2>
-    <div id="banner" class="banner warn">Esperando fotos<small>Toma la foto del Kit List y de las piezas</small></div>
-    <button class="btn ghost" id="resetBtn">Empezar nuevo kit</button>
-  </section>
+  <div class="card hidden" id="scanCard"><h2>Piezas escaneadas</h2><div id="scanList"></div></div>
+
+  <div class="card">
+    <button class="btn green" id="saveBtn">💾 Cerrar kit y guardar en historial</button>
+    <button class="btn light" id="csvBtn">⬇️ Descargar historial (Excel/CSV)</button>
+    <p class="meta" id="histInfo" style="margin-top:10px"></p>
+    <button class="btn gray" id="clearHist" style="background:#9ca3af">Borrar historial</button>
+  </div>
 </main>
+<div id="toast" class="toast hidden"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script>
-(function(){
-  const state = { kit: null, pieces: [] };
+const $ = id => document.getElementById(id);
+const norm = s => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-  const $ = id => document.getElementById(id);
-  const norm = s => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g,'');
-  const digits = s => String(s ?? '').replace(/\D/g,'');
-  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// ---------- Guardado en el teléfono ----------
+function load(key, def) { try { return JSON.parse(localStorage.getItem(key)) ?? def; } catch (e) { return def; } }
+function store(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
+let state = load('kit_actual', { kit: null, scans: [] });
+let hist = load('kit_historial', []);
 
-  // ---- Lectura de texto EN EL TELÉFONO (Tesseract.js, sin servidores externos de IA) ----
-  let worker = null;
-  async function getWorker() {
-    if (worker) return worker;
-    if (!window.Tesseract) throw { message: 'No se cargó el lector de texto. Revisa la conexión a internet.' };
-    worker = await Tesseract.createWorker('eng');
-    await worker.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-:./ ' });
-    return worker;
-  }
-  if (!window.Tesseract) $('unavailable').classList.remove('hidden');
-
-  // Reduce y mejora contraste para leer mejor
-  async function prep(file, max = 1800) {
-    const url = URL.createObjectURL(file);
-    try {
-      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
-      const scale = Math.min(1, max / Math.max(img.width, img.height));
-      const c = document.createElement('canvas');
-      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
-      const ctx = c.getContext('2d');
-      ctx.drawImage(img, 0, 0, c.width, c.height);
-      const preview = c.toDataURL('image/jpeg', 0.5);
-      const d = ctx.getImageData(0, 0, c.width, c.height), px = d.data;
-      let min = 255, max2 = 0;
-      for (let i = 0; i < px.length; i += 4) { const g = 0.299*px[i] + 0.587*px[i+1] + 0.114*px[i+2]; px[i] = g; if (g < min) min = g; if (g > max2) max2 = g; }
-      const range = Math.max(1, max2 - min);
-      for (let i = 0; i < px.length; i += 4) { const g = (px[i] - min) * 255 / range; px[i] = px[i+1] = px[i+2] = g; }
-      ctx.putImageData(d, 0, 0);
-      return { canvas: c, preview };
-    } finally { URL.revokeObjectURL(url); }
-  }
-
-  async function ocr(canvas, onProgress) {
-    const w = await getWorker();
-    const { data } = await w.recognize(canvas);
-    return (data.text || '').toUpperCase();
-  }
-
-  // Número de parte: letras + 5 o más dígitos (+ guion opcional). Ej. CP0598637, C515611-5, C519508-06
-  const PART_RE = /\b[A-Z]{1,4}\d{5,}(?:-[0-9A-Z]{1,3})?\b/g;
-  // Lote: número de 10 dígitos. Ej. 2603030700
-  const LOT_RE = /\b\d{10}\b/g;
-
-  function parseKit(text) {
-    const lines = text.split('\n');
-    const out = [];
-    const mo = (text.match(/MO\s*NO\s*[:.]?\s*(\d+)/) || [])[1] || null;
-    const op = (text.match(/OPERATION\s*NO\s*[:.]?\s*(\d+)/) || [])[1] || null;
-    const prod = (text.match(/PRODUCT\s*[:.]\s*([A-Z0-9-]+)/) || [])[1] || null;
-    lines.forEach((ln, idx) => {
-      const lots = ln.match(LOT_RE);
-      if (!lots) return;
-      const parts = (ln.match(PART_RE) || []).filter(p => !/^\d+$/.test(p));
-      if (!parts.length) return;
-      const next = lines[idx + 1] || '';
-      const alt = (next.match(/\b[A-Z]{2,}\d+[A-Z0-9]*\b/) || [])[0] || null;
-      const rev = (ln.match(/\b(NC|[A-Z])\s*$/) || [])[1] || null;
-      out.push({ item: parts[parts.length - 1], alt, descripcion: '', lote: lots[lots.length - 1], rev, lote_manual: null });
-    });
-    return { mo, operacion: op, producto: prod, lineas: out };
-  }
-
-  function parsePiece(text) {
-    const flat = text.replace(/\n/g, ' ');
-    const m = flat.match(/L\s*[O0]\s*T\s*[:.]?\s*(\d{6,})/);
-    const lote = m ? m[1] : ((flat.match(LOT_RE) || [])[0] || '');
-    const parte = ((flat.match(PART_RE) || []).filter(p => !/^\d+$/.test(p))[0]) || '';
-    const rev = (flat.match(/R\s*E\s*V\s*[:.]?\s*([A-Z0-9]{1,2})\b/) || [])[1] || '';
-    return { parte, lote, rev };
-  }
-
-
-  // Step 1: kit list
-  $('kitInput').addEventListener('change', async e => {
-    const f = e.target.files[0]; e.target.value = '';
-    if (!f) return;
-    $('kitStatus').textContent = 'Leyendo Kit List…';
-    try {
-      const { canvas } = await prep(f, 2400);
-      const r = parseKit(await ocr(canvas));
-      if (!r.lineas.length) throw { message: 'No se encontraron renglones. Toma la foto más cerca, derecha y con buena luz.' };
-      state.kit = r;
-      $('kitStatus').textContent = `Se leyeron ${r.lineas.length} renglón(es).`;
-      renderKit(); evaluate();
-    } catch (err) { $('kitStatus').textContent = '⚠️ ' + (err.message || 'No se pudo leer la foto.'); }
+// ---------- Leer códigos ----------
+// QR Kit List:  MO:8848600|OP:9800|CP0598637;2603030700;NC;1|C515611-5;2609096448;B;2
+// Data Matrix pieza:  C515611-5;2609096448;B   (o PN:...;LOT:...;REV:...)
+function isKit(t) { return /\bMO\s*:/i.test(t) || t.split(/\r?\n|\|/).filter(r => r.includes(';')).length >= 2; }
+function parseKit(t) {
+  const k = { mo: '', op: '', lineas: [] };
+  t.split(/\r?\n|\|/).map(s => s.trim()).filter(Boolean).forEach(x => {
+    if (x.includes(';')) { const [item, lote, rev, cant] = x.split(';').map(s => s.trim()); if (item) k.lineas.push({ item, lote: lote || '', rev: rev || '', cant: cant || '' }); }
+    else { const m = x.match(/^(MO|OP)\s*:\s*(.+)$/i); if (m) k[m[1].toLowerCase()] = m[2].trim(); }
   });
-
-  function renderKit() {
-    const k = state.kit; if (!k) { $('kitWrap').classList.add('hidden'); return; }
-    $('kitWrap').classList.remove('hidden');
-    $('kitMeta').textContent = [k.mo && 'MO ' + k.mo, k.operacion && 'Op ' + k.operacion, k.producto && 'Prod ' + k.producto].filter(Boolean).join(' · ');
-    $('kitBody').innerHTML = k.lineas.map((l, i) => `
-      <tr>
-        <td><input data-i="${i}" data-k="item" value="${esc(l.item)}"><div class="note">${esc([l.alt, l.descripcion].filter(Boolean).join(' · '))}</div></td>
-        <td><input data-i="${i}" data-k="lote" value="${esc(l.lote)}">${l.lote_manual ? `<div class="note">✍️ a mano: <b>${esc(l.lote_manual)}</b></div>` : ''}</td>
-        <td style="width:56px"><input data-i="${i}" data-k="rev" value="${esc(l.rev)}"></td>
-        <td style="width:84px" id="st${i}"></td>
-      </tr>`).join('');
-    $('kitBody').querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
-      state.kit.lineas[+inp.dataset.i][inp.dataset.k] = inp.value; evaluate();
-    }));
+  return k;
+}
+function parsePiece(t) {
+  if (/(PNR|PN|P\/N)\s*[: ]/i.test(t)) {
+    const g = re => (t.match(re) || [])[1] || '';
+    return { parte: g(/(?:PNR|PN|P\/N)\s*[: ]\s*([A-Z0-9\-]+)/i), lote: g(/(?:LOT|LTN|BATCH)\s*[: ]\s*([A-Z0-9\-]+)/i), rev: g(/REV\s*[: ]\s*([A-Z0-9]+)/i) };
   }
+  const [parte, lote, rev] = t.split(/[;|]/).map(s => (s || '').trim());
+  return { parte: parte || '', lote: lote || '', rev: rev || '' };
+}
 
-  // Step 2: pieces
-  async function addPieces(files) {
-    for (const f of files) {
-      const p = { id: Math.random().toString(36).slice(2), parte: '', lote: '', rev: '', preview: '', loading: true };
-      state.pieces.push(p); renderPieces();
-      $('pieceStatus').textContent = 'Leyendo pieza…';
-      try {
-        const { canvas, preview } = await prep(f, 1600);
-        p.preview = preview; renderPieces();
-        const r = parsePiece(await ocr(canvas));
-        p.parte = r.parte; p.lote = r.lote; p.rev = r.rev;
-        if (!p.parte && !p.lote) p.error = 'No se leyó el sello. Escríbelo o toma otra foto.';
-      } catch (err) { p.error = err.message || 'No se pudo leer la foto.'; }
-      p.loading = false; renderPieces(); evaluate();
-    }
-    $('pieceStatus').textContent = '';
+// ---------- Comparar ----------
+function judge(p) {
+  if (!state.kit) return { cls: 'warn', txt: 'Falta escanear el Kit List' };
+  const ls = state.kit.lineas.map((l, i) => ({ l, i })).filter(x => norm(x.l.item) === norm(p.parte));
+  if (!ls.length) return { cls: 'bad', bad: 1, txt: `❌ ${p.parte} no está en el Kit List` };
+  const hit = ls.find(x => norm(x.l.lote) === norm(p.lote));
+  if (hit) return { cls: 'ok', ok: 1, line: hit.i, txt: `✅ ${p.parte} lote ${p.lote} coincide` };
+  return { cls: 'bad', bad: 1, line: ls[0].i, txt: `❌ ${p.parte}: lote diferente. Lista ${ls.map(x => x.l.lote).join(', ')} · Pieza ${p.lote || '—'}` };
+}
+function summary() {
+  if (!state.kit) return { cls: 'warn', title: 'Escanea el QR del Kit List', sub: '' };
+  const st = {}; let bad = 0;
+  state.scans.forEach(s => { const v = judge(s); if (v.bad) bad++; if (v.line != null && st[v.line] !== 'bad') st[v.line] = v.bad ? 'bad' : 'ok'; });
+  const missing = state.kit.lineas.filter((_, i) => !st[i]).length;
+  if (bad) return { st, cls: 'bad', title: '❌ NO COINCIDE', sub: `${bad} pieza(s) con diferencia`, res: 'NO COINCIDE' };
+  if (missing) return { st, cls: 'warn', title: '⚠️ INCOMPLETO', sub: `Faltan ${missing} de ${state.kit.lineas.length} renglones`, res: 'INCOMPLETO' };
+  return { st, cls: 'ok', title: '✅ TODO COINCIDE', sub: `${state.kit.lineas.length} renglones verificados`, res: 'COINCIDE' };
+}
+
+// ---------- Pantalla ----------
+function render() {
+  store('kit_actual', state);
+  const s = summary();
+  $('banner').className = 'banner ' + s.cls;
+  $('banner').innerHTML = s.title + (s.sub ? `<small>${s.sub}</small>` : '');
+  $('kitCard').classList.toggle('hidden', !state.kit);
+  if (state.kit) {
+    $('kitMeta').textContent = `MO ${state.kit.mo || '—'} · Op ${state.kit.op || '—'}`;
+    $('kitBody').innerHTML = state.kit.lineas.map((l, i) => {
+      const x = s.st[i];
+      const pill = x === 'ok' ? '<span class="pill ok">✅ OK</span>' : x === 'bad' ? '<span class="pill bad">❌ No</span>' : '<span class="pill warn">Falta</span>';
+      return `<tr><td>${esc(l.item)}</td><td>${esc(l.lote)}</td><td>${esc(l.rev)}</td><td>${esc(l.cant)}</td><td>${pill}</td></tr>`;
+    }).join('');
   }
-  $('pieceInput').addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; addPieces(fs); });
-  $('pieceMulti').addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; addPieces(fs); });
+  $('scanCard').classList.toggle('hidden', !state.scans.length);
+  $('scanList').innerHTML = state.scans.slice().reverse().map(x => { const v = judge(x); return `<div class="scan ${v.cls}">${esc(v.txt)}<br><small>${esc(x.hora)} · ${esc(x.raw)}</small></div>`; }).join('');
+  $('histInfo').textContent = `Historial guardado: ${hist.length} kit(s).`;
+}
 
-  function renderPieces() {
-    $('pieces').innerHTML = state.pieces.map(p => `
-      <div class="piece" data-id="${p.id}">
-        ${p.preview ? `<img src="${p.preview}" alt="Foto de pieza">` : '<img alt="">'}
-        <div>
-          <div class="fields">
-            <div><label>No. parte</label><input data-k="parte" value="${esc(p.parte)}" ${p.loading ? 'disabled' : ''}></div>
-            <div><label>Lote</label><input data-k="lote" value="${esc(p.lote)}" ${p.loading ? 'disabled' : ''}></div>
-            <div><label>Rev</label><input data-k="rev" value="${esc(p.rev)}" ${p.loading ? 'disabled' : ''}></div>
-          </div>
-          <button class="rm" data-rm="1">Quitar</button>
-        </div>
-        <div class="verdict" id="v_${p.id}">${p.loading ? 'Leyendo…' : (p.error ? '⚠️ ' + esc(p.error) : '')}</div>
-      </div>`).join('');
-    $('pieces').querySelectorAll('.piece').forEach(el => {
-      const p = state.pieces.find(x => x.id === el.dataset.id);
-      el.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => { p[inp.dataset.k] = inp.value; p.error = null; evaluate(); }));
-      el.querySelector('[data-rm]').addEventListener('click', () => { state.pieces = state.pieces.filter(x => x !== p); renderPieces(); evaluate(); });
-    });
+let actx, tt;
+function feedback(good, msg) {
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = good ? 1100 : 300; g.gain.value = .15; o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + (good ? .12 : .35)); } catch (e) {}
+  try { navigator.vibrate && navigator.vibrate(good ? 60 : [120, 60, 120]); } catch (e) {}
+  const t = $('toast'); t.className = 'toast ' + (good ? 'ok' : 'bad'); t.textContent = msg;
+  clearTimeout(tt); tt = setTimeout(() => t.classList.add('hidden'), 2000);
+}
+
+// ---------- Al detectar un código ----------
+let lastT = '', lastAt = 0;
+function onCode(text) {
+  text = String(text || '').trim(); if (!text) return;
+  if (text === lastT && Date.now() - lastAt < 3000) return;
+  lastT = text; lastAt = Date.now();
+  const hora = new Date().toLocaleString();
+  if (isKit(text)) {
+    const k = parseKit(text);
+    if (!k.lineas.length) return feedback(false, 'QR sin renglones válidos');
+    if (state.kit && state.kit.mo !== k.mo && state.scans.length) saveKit(true);
+    state = { kit: k, scans: [], inicio: hora };
+    render(); return feedback(true, `Kit List cargado: ${k.lineas.length} renglones`);
   }
+  const p = parsePiece(text);
+  if (!p.parte) return feedback(false, 'Código no reconocido');
+  if (state.scans.some(x => norm(x.raw) === norm(text))) return feedback(true, 'Esa pieza ya está registrada');
+  state.scans.push({ raw: text, hora, ...p });
+  render();
+  const v = judge(p); feedback(!!v.ok, v.ok ? '✅ Coincide' : '❌ No coincide');
+}
 
-  // Step 3: compare
-  function judgePiece(p) {
-    if (!state.kit) return { cls: 'warn', txt: 'Falta la foto del Kit List' };
-    if (!p.parte && !p.lote) return null;
-    const lines = state.kit.lineas.map((l, i) => ({ l, i }))
-      .filter(({ l }) => norm(p.parte) && (norm(l.item) === norm(p.parte) || norm(l.alt) === norm(p.parte)));
-    if (!lines.length) return { cls: 'bad', txt: `❌ NO COINCIDE: el material ${p.parte || '(sin leer)'} no está en el Kit List`, bad: true };
-    const pl = digits(p.lote);
-    for (const { l, i } of lines) {
-      if (pl && digits(l.lote) === pl) {
-        const revNote = (p.rev && l.rev && norm(p.rev) !== norm(l.rev)) ? ` (rev pieza ${p.rev} / lista ${l.rev})` : '';
-        return { cls: 'ok', txt: `✅ COINCIDE: ${p.parte} lote ${p.lote}${revNote}`, line: i, ok: true };
-      }
-    }
-    for (const { l, i } of lines) {
-      if (pl && l.lote_manual && digits(l.lote_manual) === pl)
-        return { cls: 'warn', txt: `⚠️ Coincide solo con el lote corregido A MANO (${l.lote_manual}). Lista impresa: ${l.lote}`, line: i, manual: true };
-    }
-    const l = lines[0].l;
-    return { cls: 'bad', txt: `❌ NO COINCIDE: lote diferente. Lista: ${l.lote || '—'} · Pieza: ${p.lote || '(sin leer)'}`, line: lines[0].i, bad: true };
+// ---------- Cámara (detección en vivo) ----------
+let scanner = null, running = false;
+async function startCam() {
+  if (!window.Html5Qrcode) return feedback(false, 'No cargó el lector. Revisa internet.');
+  scanner = scanner || new Html5Qrcode('reader', { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.DATA_MATRIX], experimentalFeatures: { useBarCodeDetectorIfSupported: true }, verbose: false });
+  $('reader').classList.remove('hidden');
+  try {
+    await scanner.start({ facingMode: 'environment' }, { fps: 15, qrbox: (w, h) => { const m = Math.floor(Math.min(w, h) * .75); return { width: m, height: m }; } }, onCode, () => {});
+    running = true; $('startBtn').classList.add('hidden'); $('stopBtn').classList.remove('hidden');
+  } catch (e) {
+    $('reader').classList.add('hidden');
+    feedback(false, 'No se abrió la cámara: da permiso y abre la página con https');
   }
+}
+async function stopCam() {
+  if (running) { try { await scanner.stop(); } catch (e) {} }
+  running = false; $('reader').classList.add('hidden'); $('startBtn').classList.remove('hidden'); $('stopBtn').classList.add('hidden');
+}
+$('startBtn').onclick = startCam;
+$('stopBtn').onclick = stopCam;
+$('manual').onkeydown = e => { if (e.key === 'Enter') { onCode(e.target.value); e.target.value = ''; } };
 
-  function evaluate() {
-    const lineState = {};
-    let bad = 0, manual = 0, okCount = 0;
-    state.pieces.forEach(p => {
-      if (p.loading) return;
-      const v = judgePiece(p);
-      const el = $('v_' + p.id);
-      if (!v) { if (el && !p.error) { el.className = 'verdict'; el.textContent = ''; } return; }
-      if (el) { el.className = 'verdict ' + v.cls; el.textContent = v.txt; }
-      if (v.bad) bad++;
-      if (v.manual) manual++;
-      if (v.ok) okCount++;
-      if (v.line != null) {
-        const prev = lineState[v.line];
-        const rank = { bad: 3, manual: 2, ok: 1 };
-        const cur = v.bad ? 'bad' : v.manual ? 'manual' : 'ok';
-        if (!prev || rank[cur] > rank[prev]) lineState[v.line] = cur;
-      }
-    });
+// ---------- Historial ----------
+function saveKit(silent) {
+  if (!state.kit) return silent || feedback(false, 'No hay kit cargado');
+  const s = summary();
+  hist.push({ fecha: new Date().toLocaleString(), mo: state.kit.mo, op: state.kit.op, resultado: s.res, kit: state.kit, scans: state.scans.map(x => ({ ...x, estado: judge(x).ok ? 'COINCIDE' : 'NO COINCIDE' })) });
+  store('kit_historial', hist);
+  state = { kit: null, scans: [] };
+  render();
+  if (!silent) feedback(true, 'Kit guardado en historial');
+}
+$('saveBtn').onclick = () => saveKit(false);
+$('csvBtn').onclick = () => {
+  if (!hist.length) return feedback(false, 'Historial vacío');
+  const rows = [['Fecha', 'MO', 'Operacion', 'Resultado kit', 'Hora escaneo', 'Parte', 'Lote', 'Rev', 'Estado pieza']];
+  hist.forEach(h => (h.scans.length ? h.scans : [{}]).forEach(x => rows.push([h.fecha, h.mo, h.op, h.resultado, x.hora || '', x.parte || '', x.lote || '', x.rev || '', x.estado || ''])));
+  const csv = '\ufeff' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `historial_kits_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+};
+$('clearHist').onclick = () => { if (confirm('¿Borrar todo el historial?')) { hist = []; store('kit_historial', hist); render(); } };
 
-    let missing = 0;
-    if (state.kit) state.kit.lineas.forEach((l, i) => {
-      const td = $('st' + i); if (!td) return;
-      const s = lineState[i];
-      if (!s) missing++;
-      td.innerHTML = s === 'ok' ? '<span class="pill ok">✅ OK</span>'
-        : s === 'bad' ? '<span class="pill bad">❌ No</span>'
-        : s === 'manual' ? '<span class="pill warn">✍️ A mano</span>'
-        : '<span class="pill warn">Falta</span>';
-    });
-
-    const b = $('banner');
-    if (!state.kit || !state.pieces.length) {
-      b.className = 'banner warn'; b.innerHTML = 'Esperando fotos<small>Toma la foto del Kit List y de las piezas</small>'; return;
-    }
-    if (bad) { b.className = 'banner bad'; b.innerHTML = `❌ NO COINCIDE<small>${bad} pieza(s) con diferencia. No dar de baja hasta revisar.</small>`; return; }
-    if (manual) { b.className = 'banner warn'; b.innerHTML = `⚠️ REVISAR<small>${manual} pieza(s) coinciden solo con un lote escrito a mano. Corregir la baja en el sistema.</small>`; return; }
-    if (missing) { b.className = 'banner warn'; b.innerHTML = `⚠️ INCOMPLETO<small>${missing} renglón(es) del Kit List sin pieza verificada.</small>`; return; }
-    b.className = 'banner ok'; b.innerHTML = `✅ TODO COINCIDE<small>${okCount} pieza(s) verificadas contra el Kit List.</small>`;
-  }
-
-  $('resetBtn').addEventListener('click', () => {
-    state.kit = null; state.pieces = [];
-    $('kitStatus').textContent = ''; $('pieceStatus').textContent = '';
-    renderKit(); renderPieces(); evaluate();
-  });
-})();
+render();
 </script>
 </body>
 </html>
