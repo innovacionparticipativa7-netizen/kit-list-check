@@ -131,9 +131,9 @@
 const AJUSTES = {
   anchoTrabajo: 2400,     // la foto/escaneo se escala a este ancho (px). 300 dpi carta ≈ 2550
   satTinta: 55,           // qué tan "de color" debe ser un pixel para contar como pluma azul/roja
-  minTintaColor: 60,      // pixeles de color mínimos en la celda para marcar cambio
+  minTintaColor: 80,      // pixeles de pluma de color mínimos en la celda de lote para marcar cambio
   rayaFraccion: 0.70,     // fracción del ancho del lote cubierta por una línea para contarla como tachón
-  minTintaNegra: 0.012,   // fracción de la celda con tinta negra extra (fuera del texto impreso)
+  minTintaFactor: 0.6,    // tinta negra extra mínima (relativa al tamaño de la letra) para contar escritura a mano
   confBaja: 55            // confianza OCR del lote impreso por debajo de esto = revisar
 };
 
@@ -154,17 +154,6 @@ function paperLevel(img, b) {
   let acc = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * 0.8) return v; } return 255;
 }
 
-// Pixeles de pluma de color (azul, roja, verde...) en una caja
-function colorInk(img, b, exclude = []) {
-  b = clampBox(img, b); let n = 0;
-  for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) {
-    if (exclude.length && inBoxes(x, y, exclude)) continue;
-    const [r,g,bb] = px(img,x,y); const mx = Math.max(r,g,bb), mn = Math.min(r,g,bb);
-    if (mx - mn > AJUSTES.satTinta && mx < 245) n++;
-  }
-  return n;
-}
-
 // ¿Hay una línea (tachón) cruzando el lote impreso?
 function strikeScore(img, b) {
   b = clampBox(img, b); const h = b.y1 - b.y0, w = b.x1 - b.x0; if (h < 4 || w < 10) return 0;
@@ -180,36 +169,6 @@ function strikeScore(img, b) {
     best = Math.max(best, dark / (w + 1));
   }
   return best;
-}
-
-// Tinta negra extra en la celda, fuera del texto impreso y sin las líneas de la tabla
-function extraDarkInk(img, cell, exclude) {
-  const b = clampBox(img, cell); const W = b.x1 - b.x0 + 1, H = b.y1 - b.y0 + 1;
-  const thr = paperLevel(img, b) - 80;
-  const mask = new Uint8Array(W * H);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const [r,g,bb] = px(img, b.x0+x, b.y0+y); if ((r+g+bb)/3 < thr) mask[y*W+x] = 1; }
-  // quitar líneas de la tabla (columnas o filas casi completas)
-  const colGrid = new Uint8Array(W), rowGrid = new Uint8Array(H);
-  for (let x = 0; x < W; x++) { let s = 0; for (let y = 0; y < H; y++) s += mask[y*W+x]; if (s > H * 0.55) colGrid[Math.max(0,x-2)] = colGrid[x] = colGrid[Math.min(W-1,x+2)] = 1; }
-  for (let y = 0; y < H; y++) { let s = 0; for (let x = 0; x < W; x++) s += mask[y*W+x]; if (s > W * 0.75) rowGrid[y] = 1; }
-  let n = 0;
-  for (let y = 0; y < H; y++) { if (rowGrid[y]) continue; for (let x = 0; x < W; x++) {
-    if (!mask[y*W+x] || colGrid[x]) continue;
-    if (exclude.length && inBoxes(b.x0+x, b.y0+y, exclude)) continue; n++; } }
-  return n / (W * H);
-}
-
-// Agrupa marcas de color en una franja vertical (para contar cambios sin renglón)
-function colorClusters(img, b, minGap, exclude = []) {
-  b = clampBox(img, b); const rows = [];
-  for (let y = b.y0; y <= b.y1; y++) { let n = 0; for (let x = b.x0; x <= b.x1; x += 1) { if (exclude.length && inBoxes(x, y, exclude)) continue; const [r,g,bb] = px(img,x,y); const mx = Math.max(r,g,bb), mn = Math.min(r,g,bb); if (mx - mn > AJUSTES.satTinta && mx < 245) n++; } rows.push(n); }
-  const groups = []; let cur = null, gap = 0;
-  rows.forEach((n, i) => {
-    if (n > 1) { if (!cur) cur = { y0: b.y0 + i, y1: b.y0 + i, px: 0 }; cur.y1 = b.y0 + i; cur.px += n; gap = 0; }
-    else if (cur) { gap++; if (gap > minGap) { groups.push(cur); cur = null; gap = 0; } }
-  });
-  if (cur) groups.push(cur);
-  return groups.filter(g => g.px >= AJUSTES.minTintaColor);
 }
 
 // =====================================================================
@@ -236,11 +195,7 @@ function findLayout(words, img) {
       colX1 = Math.min(colX1, (lotRev ? lotRev.x0 : rev.x0) - hw * 0.1);
     }
     topY = head.y1 + (head.y1 - head.y0) * 0.6;
-  } else if (lots.length) {
-    colX0 = Math.min(...lots.map(l => l.x0)); colX1 = Math.max(...lots.map(l => l.x1));
-    const w = colX1 - colX0; colX0 -= w * 0.35; colX1 += w * 0.35;
-    topY = Math.min(...lots.map(l => l.y0)) - (lots[0].y1 - lots[0].y0) * 3;
-  } else return null;
+  } else return null; // sin encabezado LOT-NO no se revisa nada (evita falsas alarmas)
 
   const lotWords = lots.filter(l => { const cx = (l.x0 + l.x1) / 2; return cx > colX0 && cx < colX1 && l.y0 > topY; });
   const items = W.filter(w => PART_RE.test(w.t) && w.x1 < colX0 && w.y0 > topY);
@@ -268,7 +223,125 @@ function findLayout(words, img) {
     r.cell = { x0: colX0, y0, x1: colX1, y1 };
   });
   const bottom = rows.length ? rows[rows.length - 1].cell.y1 : topY;
-  return { col: { x0: colX0, x1: colX1, y0: topY, y1: img.height - 1 }, rows, bottom };
+  return { head, colX0, colX1, topY, rows, bottom };
+}
+
+// =====================================================================
+//  REVISIÓN SOLO DE LA COLUMNA LOT-NO
+// =====================================================================
+const gray = (img, x, y) => { const i = (y * img.width + x) * 4; return (img.data[i] + img.data[i+1] + img.data[i+2]) / 3; };
+// Tinta = pixel oscuro, o pixel de pluma de color (azul/roja) más oscuro que el papel
+function inkType(img, x, y, paper, gris) {
+  const i = (y * img.width + x) * 4, r = img.data[i], g = img.data[i+1], b = img.data[i+2];
+  const avg = (r + g + b) / 3, sat = Math.max(r, g, b) - Math.min(r, g, b);
+  if (!gris && sat > AJUSTES.satTinta && avg < paper - 35) return 2; // color
+  if (avg < paper - 80) return 1;                                    // negro
+  return 0;
+}
+
+// Busca la línea vertical de la tabla más marcada entre xa y xb dentro de una franja
+function findVLine(img, xa, xb, y0, y1, paper) {
+  xa = Math.max(0, Math.round(xa)); xb = Math.min(img.width - 1, Math.round(xb));
+  let best = -1, bestX = null; const H = y1 - y0 + 1;
+  for (let x = xa; x <= xb; x++) {
+    let s = 0; for (let y = y0; y <= y1; y += 2) if (gray(img, x, y) < paper - 70) s++;
+    if (s > best) { best = s; bestX = x; }
+  }
+  return best >= (H / 2) * 0.55 ? bestX : null;
+}
+
+function analyzeLotColumn(img, layout, printedBoxes, gris) {
+  const { head, colX0, colX1, topY, rows } = layout;
+  const hw = head.x1 - head.x0;
+  const h = rows.length ? Math.max(...rows.map(r => r.h)) : (head.y1 - head.y0);
+  const paper = paperLevel(img, { x0: colX0, y0: topY, x1: colX1, y1: Math.min(img.height - 1, topY + h * 20) });
+  const yTop = Math.round(Math.max(topY, head.y1 + 2));
+
+  // 1) Bordes de la columna, siguiendo las líneas verticales en franjas (por si la foto está inclinada)
+  const band = Math.max(20, Math.round(h * 3));
+  let L = colX0, R = colX1;
+  const strips = [];
+  for (let y0 = yTop; y0 < img.height; y0 += band) {
+    const y1 = Math.min(img.height - 1, y0 + band - 1);
+    const l = findVLine(img, L - hw * 0.25, L + hw * 0.25, y0, y1, paper);
+    const r = findVLine(img, R - hw * 0.25, R + hw * 0.25, y0, y1, paper);
+    if (l != null) L = l; if (r != null) R = r;
+    const inset = Math.max(6, hw * 0.06);
+    strips.push({ y0, y1, x0: Math.round(L + inset), x1: Math.round(R - inset) });
+  }
+  const stripAt = y => strips.find(s => y >= s.y0 && y <= s.y1);
+
+  // 2) Mapa de tinta dentro de la columna (sin el texto impreso)
+  const excl = printedBoxes.filter(b => b.x1 > colX0 - hw && b.x0 < colX1 + hw && b.y1 > yTop).map(b => ({ x0: b.x0 - 3, y0: b.y0 - 3, x1: b.x1 + 3, y1: b.y1 + 3 }));
+  const minX = Math.min(...strips.map(s => s.x0)), maxX = Math.max(...strips.map(s => s.x1));
+  const Wm = maxX - minX + 1, Hm = img.height - yTop;
+  const dark = new Uint8Array(Wm * Hm), color = new Uint8Array(Wm * Hm), faint = new Uint8Array(Wm * Hm);
+  for (let yi = 0; yi < Hm; yi++) {
+    const y = yTop + yi, s = stripAt(y); if (!s) continue;
+    for (let x = s.x0; x <= s.x1; x++) {
+      if (gray(img, x, y) < paper - 40) faint[yi * Wm + x - minX] = 1; // para encontrar líneas tenues de la tabla
+      const t = inkType(img, x, y, paper, gris); if (!t || inBoxes(x, y, excl)) continue;
+      if (t === 2) color[yi * Wm + x - minX] = 1; else dark[yi * Wm + x - minX] = 1;
+    }
+  }
+  // 3) Líneas horizontales de la tabla: tinta negra que cruza casi todo el ancho de la columna
+  const win = Math.max(4, Math.round(h * 0.25));
+  const cum = new Int32Array((Hm + 1) * Wm);
+  for (let yi = 0; yi < Hm; yi++) for (let x = 0; x < Wm; x++) cum[(yi + 1) * Wm + x] = cum[yi * Wm + x] + faint[yi * Wm + x];
+  const lineRow = new Uint8Array(Hm);
+  for (let yi = 0; yi < Hm; yi++) {
+    const s = stripAt(yTop + yi); if (!s) continue;
+    const a = Math.max(0, yi - win), b = Math.min(Hm, yi + win + 1);
+    let cov = 0; for (let x = s.x0 - minX; x <= s.x1 - minX; x++) if (cum[b * Wm + x] - cum[a * Wm + x] > 0) cov++;
+    if (cov > (s.x1 - s.x0 + 1) * 0.9) lineRow[yi] = 1;
+  }
+  // Fondo de la tabla: primera línea después del último renglón
+  const lastRowEnd = rows.length ? rows[rows.length - 1].cy + rows[rows.length - 1].h : yTop;
+  let yBottom = img.height - 1;
+  for (let yi = 0; yi < Hm; yi++) if (lineRow[yi] && yTop + yi > lastRowEnd + h) { yBottom = yTop + yi - win - 2; break; }
+  strips.forEach(s => { s.y1 = Math.min(s.y1, yBottom); });
+  while (strips.length && strips[strips.length - 1].y0 > yBottom) strips.pop();
+
+  // 4) Zonas de cada renglón dentro de la columna
+  const zones = rows.map((r, i) => {
+    const next = rows[i + 1];
+    return { y0: Math.max(yTop, r.cy - r.h * 1.3), y1: Math.min(yBottom, next ? next.cy - next.h * 1.3 : r.cy + r.h * 5) };
+  });
+  const strikes = rows.map(r => r.lot ? strikeScore(img, r.lot) : 0);
+
+  // 5) Contar tinta por renglón y fuera de renglones
+  const perRow = rows.map(() => ({ color: 0, dark: 0 }));
+  const outside = new Map();
+  for (let y = yTop; y <= yBottom; y++) {
+    const yi = y - yTop, zi = zones.findIndex(z => y >= z.y0 && y <= z.y1);
+    let c = 0, d = 0;
+    for (let x = 0; x < Wm; x++) { c += color[yi * Wm + x]; if (!lineRow[yi]) d += dark[yi * Wm + x]; }
+    if (zi >= 0) { perRow[zi].color += c; perRow[zi].dark += d; }
+    else if (c + d) outside.set(y, c + d);
+  }
+  const minInk = Math.round(h * h * AJUSTES.minTintaFactor);
+  let extraMarks = 0, cur = 0, gap = 0, open = false;
+  for (let y = yTop; y <= yBottom + 1; y++) {
+    const n = outside.get(y) || 0;
+    if (n > 1) { cur += n; gap = 0; open = true; }
+    else if (open && ++gap > h * 2) { if (cur >= minInk) extraMarks++; cur = 0; gap = 0; open = false; }
+  }
+  if (open && cur >= minInk) extraMarks++;
+
+  const results = rows.map((r, i) => {
+    const reasons = [];
+    if (perRow[i].color >= AJUSTES.minTintaColor) reasons.push('pluma de color');
+    if (strikes[i] >= AJUSTES.rayaFraccion) reasons.push('lote tachado');
+    if (perRow[i].dark >= minInk) reasons.push('escritura a mano');
+    let estado = reasons.length ? 'cambio' : 'ok';
+    if (estado === 'ok' && (!r.lot || r.lot.conf < AJUSTES.confBaja)) { estado = 'revisar'; reasons.push(r.lot ? 'lote impreso poco legible' : 'no se encontró el lote impreso'); }
+    const z = zones[i], s0 = stripAt(Math.round((z.y0 + z.y1) / 2)) || strips[0];
+    const cell = clampBox(img, { x0: s0.x0 - 4, y0: z.y0, x1: s0.x1 + 4, y1: z.y1 });
+    return { linea: i + 1, item: r.item, impreso: r.lot ? r.lot.t : '', estado, reasons, cell,
+      lotBox: r.lot ? { x0: r.lot.x0, y0: r.lot.y0, x1: r.lot.x1, y1: r.lot.y1 } : null, nuevo: null,
+      debug: { color: perRow[i].color, dark: perRow[i].dark, strike: +strikes[i].toFixed(2), minInk } };
+  });
+  return { results, extraMarks, strips, yBottom };
 }
 
 // =====================================================================
@@ -363,7 +436,7 @@ async function ocrWithRotation(w, canvas) {
     const layout = findLayout(data.words || [], img);
     const score = layout ? layout.rows.length + (layout.rows.some(r => r.lot) ? 1 : 0) : 0;
     if (!best || score > best.score) best = { canvas: c, img, data, layout, score, deg };
-    if (score >= 2 || (layout && layout.rows.length)) break; // tabla encontrada
+    if (layout && layout.rows.length) break; // columna LOT-NO encontrada
   }
   return best;
 }
@@ -374,37 +447,15 @@ async function analyzePage(canvas, label) {
   const text = (data.text || '').toUpperCase();
   const mo = (text.match(/MO\s*N[O0]\s*[:.]?\s*(\d{5,})/) || [])[1] || '';
   const gris = isGrayscale(img);
-  const results = [];
-  let extraMarks = 0, mode = 'tabla';
-
-  if (layout && layout.rows.length) {
-    const printed = (data.words || []).map(x => x.bbox);
-    layout.rows.forEach((r, i) => {
-      const lotBox = r.lot ? { x0: r.lot.x0, y0: r.lot.y0, x1: r.lot.x1, y1: r.lot.y1 } : null;
-      const color = gris ? 0 : colorInk(img, r.cell);
-      const strike = lotBox ? strikeScore(img, lotBox) : 0;
-      const exclude = printed.filter(b => b.x1 > r.cell.x0 && b.x0 < r.cell.x1 && b.y1 > r.cell.y0 && b.y0 < r.cell.y1 && !(lotBox && b.x0 === lotBox.x0 && b.y0 === lotBox.y0 && strike >= AJUSTES.rayaFraccion));
-      const dark = extraDarkInk(img, r.cell, exclude.map(b => ({ x0: b.x0 - 3, y0: b.y0 - 3, x1: b.x1 + 3, y1: b.y1 + 3 })));
-      const reasons = [];
-      if (color >= AJUSTES.minTintaColor) reasons.push('pluma de color');
-      if (strike >= AJUSTES.rayaFraccion) reasons.push('lote tachado');
-      if (dark >= AJUSTES.minTintaNegra) reasons.push('escritura a mano');
-      let estado = reasons.length ? 'cambio' : 'ok';
-      if (estado === 'ok' && (!r.lot || r.lot.conf < AJUSTES.confBaja)) { estado = 'revisar'; reasons.push(r.lot ? 'lote impreso poco legible' : 'no se encontró el lote impreso'); }
-      results.push({ linea: i + 1, item: r.item, impreso: r.lot ? r.lot.t : '', estado, reasons, cell: clampBox(img, r.cell), lotBox, nuevo: null });
-    });
-    if (!gris) {
-      const h = layout.rows[0].h || 20;
-      extraMarks = colorClusters(img, layout.col, h * 2, layout.rows.map(r => r.cell)).length;
-    }
-    for (const r of results.filter(r => r.estado === 'cambio')) {
-      try { const n = await readHandwritten(w, cv, r.cell, r.lotBox); if (n && n !== r.impreso) r.nuevo = n; } catch (e) {}
-    }
-  } else {
-    mode = 'hoja';
-    if (!gris) extraMarks = colorClusters(img, { x0: 0, y0: 0, x1: img.width - 1, y1: img.height - 1 }, img.height * 0.02).length;
+  if (!layout || !layout.rows.length) {
+    return { label, mo, results: [], extraMarks: 0, mode: 'sinColumna', gris, deg, canvas: cv, strips: [] };
   }
-  return { label, mo, results, extraMarks, mode, gris, deg, canvas: cv };
+  const printed = (data.words || []).map(x => x.bbox);
+  const { results, extraMarks, strips } = analyzeLotColumn(img, layout, printed, gris);
+  for (const r of results.filter(r => r.estado === 'cambio')) {
+    try { const n = await readHandwritten(w, cv, r.cell, r.lotBox); if (n && n !== r.impreso) r.nuevo = n; } catch (e) {}
+  }
+  return { label, mo, results, extraMarks, mode: 'columna', gris, deg, canvas: cv, strips };
 }
 
 let busy = false;
@@ -446,24 +497,27 @@ async function processFiles(files, origen = 'manual') {
 function renderSummary(all) {
   const tot = all.reduce((s, r) => s + r.results.filter(x => x.estado === 'cambio').length + r.extraMarks, 0);
   const b = $('sumBanner'); $('sumCard').classList.remove('hidden');
-  if (tot) { b.className = 'banner bad'; b.innerHTML = `⚠️ ${tot} CAMBIO${tot > 1 ? 'S' : ''} DE LOTE<small>en ${all.length} hoja(s) revisada(s)</small>`; }
+  const sinCol = all.filter(r => r.mode === 'sinColumna').length;
+  if (tot) { b.className = 'banner bad'; b.innerHTML = `⚠️ ${tot} CAMBIO${tot > 1 ? 'S' : ''} DE LOTE<small>en ${all.length} hoja(s) revisada(s)${sinCol ? ` · ${sinCol} no se pudo(ieron) leer` : ''}</small>`; }
+  else if (sinCol) { b.className = 'banner warn'; b.innerHTML = `NO SE PUDO REVISAR<small>${sinCol} de ${all.length} hoja(s): no se encontró la columna LOT-NO. Toma la foto otra vez.</small>`; }
   else { b.className = 'banner ok'; b.innerHTML = `✅ SIN CAMBIOS DE LOTE<small>${all.length} hoja(s) revisada(s)</small>`; }
   try { navigator.vibrate && navigator.vibrate(tot ? [150, 80, 150] : 60); } catch (e) {}
 }
 
-function renderPage({ label, mo, results, extraMarks, mode, gris, deg, canvas }) {
+function renderPage({ label, mo, results, extraMarks, mode, gris, deg, canvas, strips }) {
   const cambios = results.filter(r => r.estado === 'cambio');
   const revisar = results.filter(r => r.estado === 'revisar');
   const total = cambios.length + extraMarks;
   const card = document.createElement('div'); card.className = 'card';
   let cls, head;
   if (total) { cls = 'bad'; head = `⚠️ ${total} cambio${total > 1 ? 's' : ''} de lote`; }
+  else if (mode === 'sinColumna') { cls = 'warn'; head = 'No se encontró la columna LOT-NO'; }
   else if (revisar.length) { cls = 'warn'; head = `Revisar ${revisar.length} línea(s)`; }
   else { cls = 'ok'; head = '✅ Sin cambios de lote'; }
   const notes = [];
   if (gris) notes.push('⚠️ El archivo está en blanco y negro: no se puede detectar pluma de color. Configura el escáner en COLOR.');
   if (deg) notes.push(`La hoja venía girada ${deg}°; se enderezó automáticamente.`);
-  if (mode === 'hoja') notes.push('No se identificó la tabla del Kit List; solo se contaron marcas de pluma de color en la hoja.');
+  if (mode === 'sinColumna') notes.push('No se leyó el encabezado LOT-NO ni las líneas del Kit List. Toma la foto otra vez: de frente, con la hoja completa y buena luz.');
   let html = `<h2>${esc(label)}${mo ? ' · MO ' + esc(mo) : ''}</h2>
     <div class="banner ${cls}" style="font-size:19px">${head}<small>${results.length} línea(s) leídas</small></div>
     ${notes.map(n => `<p class="meta">${esc(n)}</p>`).join('')}`;
@@ -474,15 +528,21 @@ function renderPage({ label, mo, results, extraMarks, mode, gris, deg, canvas })
       <div class="meta">Detectado por: ${esc(r.reasons.join(', '))}</div>
       <img src="${crop(canvas, r.cell).toDataURL('image/jpeg', 0.75)}" alt="Celda de lote línea ${r.linea}"></div>`;
   });
-  if (extraMarks) html += `<div class="alert bad" style="margin-top:10px"><b>⚠️ ${extraMarks} marca(s) de corrección sin línea identificada</b><div class="meta">Hay escritura con pluma que no se pudo asociar a una línea. Revisa la hoja.</div></div>`;
+  if (extraMarks) html += `<div class="alert bad" style="margin-top:10px"><b>⚠️ ${extraMarks} marca(s) de corrección sin línea identificada</b><div class="meta">Hay escritura en la columna LOT-NO que no se pudo asociar a una línea. Revisa la hoja.</div></div>`;
   revisar.forEach(r => { html += `<div class="alert warn" style="margin-top:10px"><b>Revisar línea ${r.linea}${r.item ? ' · ' + esc(r.item) : ''}</b><div class="meta">${esc(r.reasons.join(', '))}</div><img src="${crop(canvas, r.cell).toDataURL('image/jpeg', 0.75)}" alt=""></div>`; });
-  html += `<details style="margin-top:10px"><summary class="meta">Ver hoja marcada (🟥 cambio · 🟧 revisar · 🟩 sin cambio)</summary><canvas class="annot"></canvas></details>`;
+  html += `<details style="margin-top:10px"><summary class="meta">Ver hoja marcada (🟦 zona revisada · 🟥 cambio · 🟧 revisar · 🟩 sin cambio)</summary><canvas class="annot"></canvas></details>`;
   card.innerHTML = html;
   $('results').appendChild(card);
 
   const out = card.querySelector('canvas.annot'); out.width = canvas.width; out.height = canvas.height;
   const g = out.getContext('2d'); g.drawImage(canvas, 0, 0);
   g.lineWidth = Math.max(3, canvas.width / 400); g.font = `bold ${Math.round(canvas.width / 45)}px system-ui`;
+  if (strips && strips.length) {
+    g.strokeStyle = '#2563eb'; g.setLineDash([12, 8]); g.beginPath();
+    strips.forEach((s, i) => { if (i === 0) g.moveTo(s.x0, s.y0); g.lineTo(s.x0, s.y1); });
+    for (let i = strips.length - 1; i >= 0; i--) { g.lineTo(strips[i].x1, strips[i].y1); g.lineTo(strips[i].x1, strips[i].y0); }
+    g.closePath(); g.stroke(); g.setLineDash([]);
+  }
   results.forEach(r => {
     g.strokeStyle = g.fillStyle = r.estado === 'cambio' ? '#e11d48' : r.estado === 'revisar' ? '#f59e0b' : '#16a34a';
     g.strokeRect(r.cell.x0, r.cell.y0, r.cell.x1 - r.cell.x0, r.cell.y1 - r.cell.y0);
