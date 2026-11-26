@@ -59,6 +59,11 @@
   .rec .actions button.primary{background:#0f8a4b;color:#fff;border:0}
   .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:99px;padding:1px 8px;margin-left:6px;vertical-align:middle}
   .tag.auto{background:#eef2ff;color:#1f4fd1}.tag.done{background:#e5e7eb;color:#374151}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:20;display:flex;align-items:center;justify-content:center;padding:10px}
+  .modalbox{background:#fff;border-radius:14px;padding:14px;max-width:680px;width:100%;max-height:96vh;overflow:auto}
+  .zonewrap{max-height:62vh;overflow:auto;border:1px solid #e3e6ea;border-radius:8px}
+  #zoneCanvas{width:100%;display:block;touch-action:none;cursor:crosshair}
+  .linkbtn{background:none;border:0;color:#1f4fd1;text-decoration:underline;font-size:13px;cursor:pointer;padding:0}
 </style>
 </head>
 <body>
@@ -93,6 +98,7 @@
     <input id="files" type="file" accept="image/*,application/pdf" multiple>
     <div id="drop" class="drop">o arrastra aquí los archivos del escáner</div>
     <p class="meta" style="margin-top:10px"><b>Escáner:</b> a color, 300 dpi, PDF o JPG. <b>Teléfono:</b> de frente, hoja completa, buena luz. Funciona mejor si los cambios se hacen con pluma azul o roja.</p>
+    <p class="meta" id="zonaInfo"></p>
     <div class="progress hidden" id="prog"><div id="progBar"></div></div>
     <p class="meta" id="status"></p>
   </div>
@@ -121,6 +127,17 @@
   </div>
 </div>
 </main>
+
+<div id="zoneModal" class="modal hidden">
+  <div class="modalbox">
+    <h2>Marca la columna de lote</h2>
+    <p class="meta" style="margin-top:0">Arrastra con el dedo o el mouse un rectángulo sobre la columna <b>LOT-NO</b>, desde abajo del encabezado hasta el final de la tabla.</p>
+    <div class="zonewrap"><canvas id="zoneCanvas"></canvas></div>
+    <label class="meta" style="display:block;margin-top:8px"><input type="checkbox" id="zoneAlways"> Usar siempre esta zona (recomendado con escáner, donde la hoja sale siempre en la misma posición)</label>
+    <p class="meta" id="zoneMsg" style="color:#c62828"></p>
+    <div class="row"><button class="btn gray" id="zoneCancel">Cancelar</button><button class="btn" id="zoneOk">Revisar esta zona</button></div>
+  </div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -172,42 +189,81 @@ function strikeScore(img, b) {
 }
 
 // =====================================================================
-//  ESTRUCTURA DEL KIT LIST A PARTIR DEL OCR
+//  UBICAR LA COLUMNA DE LOTE (3 formas: encabezado, números de lote, zona marcada a mano)
 // =====================================================================
 const PART_RE = /^[A-Z]{1,4}\d{5,}(-[0-9A-Z]{1,3})?$/;
-const LOT_RE = /^\d{8,12}$/;
 const clean = t => String(t || '').toUpperCase().replace(/[^A-Z0-9\-]/g, '');
+const median = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+// El lector a veces confunde letras con números: O→0, I/l→1, S→5, B→8, Z→2
+const fixDigits = t => t.replace(/[OoQD]/g, '0').replace(/[IlL|!]/g, '1').replace(/S/g, '5').replace(/B/g, '8').replace(/Z/g, '2');
+function lotCandidate(text) {
+  const raw = String(text || '').replace(/[^A-Za-z0-9]/g, '');
+  if (raw.length < 9 || raw.length > 13) return null;
+  const dig = (raw.match(/\d/g) || []).length;
+  if (dig / raw.length < 0.5) return null;
+  const d = fixDigits(raw);
+  return /^\d{9,12}$/.test(d) ? d : null;
+}
 
-function findLayout(words, img) {
-  const W = words.map(w => ({ t: clean(w.text), raw: w.text, conf: w.confidence, ...w.bbox }));
-  // Encabezado LOT-NO
-  let head = W.find(w => /^LOT-?NO$/.test(w.t));
-  if (!head) { const lot = W.find((w, i) => w.t === 'LOT' && W[i+1] && /^-?NO$/.test(W[i+1].t)); if (lot) head = lot; }
-  const lots = W.filter(w => LOT_RE.test(w.t.replace(/-/g, '')));
-  let colX0, colX1, topY;
-  if (head) {
-    const hw = head.x1 - head.x0;
-    colX0 = head.x0 - hw * 0.45; colX1 = head.x1 + hw * 0.9;
-    const rev = W.find(w => w.t === 'REV' && w.x0 > head.x1 && Math.abs(w.y0 - head.y0) < (head.y1 - head.y0) * 1.5 && w.x0 < head.x1 + hw * 2.5);
-    if (rev) {
-      // Encabezado "LOT REV": usar el inicio de "LOT" si viene antes de "REV"
-      const lotRev = W.find(w => w.t === 'LOT' && w !== head && w.x1 <= rev.x0 + 2 && rev.x0 - w.x1 < hw * 0.6 && Math.abs(w.y0 - rev.y0) < (rev.y1 - rev.y0));
-      colX1 = Math.min(colX1, (lotRev ? lotRev.x0 : rev.x0) - hw * 0.1);
+function findZone(words, img, manual) {
+  const W = words.map(w => ({ t: clean(w.text), raw: w.text, conf: w.confidence, lot: lotCandidate(w.text), ...w.bbox }));
+  const textH = median(W.filter(w => /[A-Z0-9]/.test(w.t)).map(w => w.y1 - w.y0)) || 20;
+  let zone = null, method = '', head = null;
+
+  // 1) Zona marcada a mano (guardada como fracción de la hoja)
+  if (manual) {
+    zone = { x0: manual.x0 * img.width, x1: manual.x1 * img.width, y0: manual.y0 * img.height, y1: manual.y1 * img.height, track: true };
+    const zw = zone.x1 - zone.x0; zone.unitW = zw * 0.4;
+    // busca las líneas de la tabla cerca de los bordes que dibujó la persona
+    zone.searchL = [zone.x0 - zw * 0.12, zone.x0 + zw * 0.2]; zone.searchR = [zone.x1 - zw * 0.2, zone.x1 + zw * 0.12];
+    method = 'manual';
+  }
+  // 2) Encabezado LOT-NO (acepta L0T-N0, LOTNO, LOT NO...)
+  if (!zone) {
+    const isHead = t => /^L[O0]T-?N[O0]\.?$/.test(t);
+    head = W.find(w => isHead(w.t));
+    if (!head) {
+      const i = W.findIndex((w, k) => /^L[O0]T-?$/.test(w.t) && W[k + 1] && /^-?N[O0]\.?$/.test(W[k + 1].t) && Math.abs(W[k + 1].y0 - w.y0) < (w.y1 - w.y0));
+      if (i >= 0) { const a = W[i], b = W[i + 1]; head = { x0: a.x0, y0: Math.min(a.y0, b.y0), x1: b.x1, y1: Math.max(a.y1, b.y1), t: 'LOT-NO' }; }
     }
-    topY = head.y1 + (head.y1 - head.y0) * 0.6;
-  } else return null; // sin encabezado LOT-NO no se revisa nada (evita falsas alarmas)
+    if (head) {
+      const hw = head.x1 - head.x0;
+      let x0 = head.x0 - hw * 0.45, x1 = head.x1 + hw * 0.9;
+      const rev = W.find(w => w.t === 'REV' && w.x0 > head.x1 && Math.abs(w.y0 - head.y0) < (head.y1 - head.y0) * 1.5 && w.x0 < head.x1 + hw * 2.5);
+      if (rev) {
+        const lotRev = W.find(w => /^L[O0]T$/.test(w.t) && w.x1 <= rev.x0 + 2 && w.x0 > head.x1 && rev.x0 - w.x1 < hw * 0.6);
+        x1 = Math.min(x1, (lotRev ? lotRev.x0 : rev.x0) - hw * 0.1);
+      }
+      zone = { x0, x1, y0: head.y1 + 2, y1: null, track: true, unitW: hw }; method = 'encabezado';
+    }
+  }
+  // 3) Sin encabezado: buscar la columna donde están los números de lote (10 dígitos) en la zona de materiales
+  if (!zone) {
+    const cands = W.filter(w => w.lot && w.lot.length >= 9);
+    if (cands.length) {
+      const lw = median(cands.map(c => c.x1 - c.x0));
+      const groups = [];
+      cands.forEach(c => { const cx = (c.x0 + c.x1) / 2; const g = groups.find(g => Math.abs(g.cx - cx) < lw * 0.8); if (g) g.items.push(c); else groups.push({ cx, items: [c] }); });
+      groups.sort((a, b) => b.items.length - a.items.length || b.cx - a.cx);
+      const g = groups[0].items;
+      const minX = Math.min(...g.map(c => c.x0)), maxX = Math.max(...g.map(c => c.x1)), minY = Math.min(...g.map(c => c.y0));
+      zone = { x0: minX - lw * 0.35, x1: maxX + lw * 0.35, y0: minY - textH * 0.5, y1: null, track: true, unitW: lw * 0.7,
+        searchL: [minX - lw * 0.5, minX - 2], searchR: [maxX + 2, maxX + lw * 0.5] };
+      method = 'numeros';
+    }
+  }
+  if (!zone) return null;
 
-  const lotWords = lots.filter(l => { const cx = (l.x0 + l.x1) / 2; return cx > colX0 && cx < colX1 && l.y0 > topY; });
-  const items = W.filter(w => PART_RE.test(w.t) && w.x1 < colX0 && w.y0 > topY);
-
-  // Renglones: cada número de parte; se le asigna el lote a su altura
+  // Renglones: números de parte a la izquierda + lotes dentro de la zona
+  const inZoneY = y => y > zone.y0 && (!zone.y1 || y < zone.y1);
+  const lotWords = W.filter(w => w.lot && inZoneY(w.y0) && (w.x0 + w.x1) / 2 > zone.x0 && (w.x0 + w.x1) / 2 < zone.x1);
+  const items = W.filter(w => PART_RE.test(w.t) && w.x1 < zone.x0 && inZoneY(w.y0));
   const rows = [];
   items.sort((a, b) => a.y0 - b.y0).forEach(it => {
     const h = it.y1 - it.y0, cy = (it.y0 + it.y1) / 2;
-    if (rows.some(r => Math.abs(r.cy - cy) < h * 0.8)) return; // mismo renglón (BIN + ITEM)
-    rows.push({ cy, h, item: it.t, itemBox: it });
+    if (rows.some(r => Math.abs(r.cy - cy) < h * 0.8)) return;
+    rows.push({ cy, h, item: it.t });
   });
-  // Si el número de parte sale en la misma línea que el BIN, prefiere el que no parece BIN
   lotWords.forEach(l => {
     const cy = (l.y0 + l.y1) / 2, h = l.y1 - l.y0;
     let r = rows.find(r => Math.abs(r.cy - cy) < Math.max(r.h, h) * 0.9);
@@ -215,19 +271,12 @@ function findLayout(words, img) {
     if (!r.lot || l.conf > r.lot.conf) r.lot = l;
   });
   rows.sort((a, b) => a.cy - b.cy);
-  // Celda de lote de cada renglón: desde arriba del renglón hasta el siguiente
-  rows.forEach((r, i) => {
-    const h = r.h || 20, next = rows[i+1];
-    const y0 = r.cy - h * 1.3;
-    const y1 = next ? Math.min(next.cy - next.h * 0.9, r.cy + h * 5) : r.cy + h * 4;
-    r.cell = { x0: colX0, y0, x1: colX1, y1 };
-  });
-  const bottom = rows.length ? rows[rows.length - 1].cell.y1 : topY;
-  return { head, colX0, colX1, topY, rows, bottom };
+  const h = median(rows.map(r => r.h)) || textH;
+  return { method, zone, rows, h, head, lotsRead: lotWords.map(l => l.lot), textH };
 }
 
 // =====================================================================
-//  REVISIÓN SOLO DE LA COLUMNA LOT-NO
+//  REVISIÓN DENTRO DE LA COLUMNA DE LOTE
 // =====================================================================
 const gray = (img, x, y) => { const i = (y * img.width + x) * 4; return (img.data[i] + img.data[i+1] + img.data[i+2]) / 3; };
 // Tinta = pixel oscuro, o pixel de pluma de color (azul/roja) más oscuro que el papel
@@ -239,52 +288,61 @@ function inkType(img, x, y, paper, gris) {
   return 0;
 }
 
-// Busca la línea vertical de la tabla más marcada entre xa y xb dentro de una franja
+// Busca la línea vertical de la tabla más marcada entre xa y xb dentro de una franja (tolera líneas algo inclinadas)
 function findVLine(img, xa, xb, y0, y1, paper) {
-  xa = Math.max(0, Math.round(xa)); xb = Math.min(img.width - 1, Math.round(xb));
-  let best = -1, bestX = null; const H = y1 - y0 + 1;
-  for (let x = xa; x <= xb; x++) {
-    let s = 0; for (let y = y0; y <= y1; y += 2) if (gray(img, x, y) < paper - 70) s++;
-    if (s > best) { best = s; bestX = x; }
+  xa = Math.max(2, Math.round(xa)); xb = Math.min(img.width - 3, Math.round(xb));
+  if (xb <= xa) return null;
+  const n = xb - xa + 1, cnt = new Int32Array(n), f = new Uint8Array(n + 4);
+  let rowsN = 0;
+  for (let y = y0; y <= y1; y += 2) {
+    rowsN++;
+    for (let i = 0; i < n + 4; i++) f[i] = gray(img, xa - 2 + i, y) < paper - 70 ? 1 : 0;
+    for (let i = 0; i < n; i++) if (f[i] | f[i + 1] | f[i + 2] | f[i + 3] | f[i + 4]) cnt[i]++;
   }
-  return best >= (H / 2) * 0.55 ? bestX : null;
+  let best = -1, bestX = null;
+  for (let i = 0; i < n; i++) if (cnt[i] > best) { best = cnt[i]; bestX = xa + i; }
+  return best >= rowsN * 0.6 ? bestX : null;
 }
 
-function analyzeLotColumn(img, layout, printedBoxes, gris) {
-  const { head, colX0, colX1, topY, rows } = layout;
-  const hw = head.x1 - head.x0;
-  const h = rows.length ? Math.max(...rows.map(r => r.h)) : (head.y1 - head.y0);
-  const paper = paperLevel(img, { x0: colX0, y0: topY, x1: colX1, y1: Math.min(img.height - 1, topY + h * 20) });
-  const yTop = Math.round(Math.max(topY, head.y1 + 2));
+function analyzeLotColumn(img, Z, printedBoxes, gris) {
+  const { zone, rows, h } = Z;
+  const unitW = zone.unitW;
+  const yTop = Math.max(0, Math.round(zone.y0));
+  const yEnd = zone.y1 ? Math.min(img.height - 1, Math.round(zone.y1)) : img.height - 1;
+  const paper = paperLevel(img, { x0: zone.x0, y0: yTop, x1: zone.x1, y1: Math.min(yEnd, yTop + h * 20) });
 
   // 1) Bordes de la columna, siguiendo las líneas verticales en franjas (por si la foto está inclinada)
   const band = Math.max(20, Math.round(h * 3));
-  let L = colX0, R = colX1;
+  let L = zone.x0, R = zone.x1;
   const strips = [];
-  for (let y0 = yTop; y0 < img.height; y0 += band) {
-    const y1 = Math.min(img.height - 1, y0 + band - 1);
-    const l = findVLine(img, L - hw * 0.25, L + hw * 0.25, y0, y1, paper);
-    const r = findVLine(img, R - hw * 0.25, R + hw * 0.25, y0, y1, paper);
-    if (l != null) L = l; if (r != null) R = r;
-    const inset = Math.max(6, hw * 0.06);
-    strips.push({ y0, y1, x0: Math.round(L + inset), x1: Math.round(R - inset) });
+  for (let y0 = yTop; y0 <= yEnd; y0 += band) {
+    const y1 = Math.min(yEnd, y0 + band - 1);
+    if (zone.track) {
+      const first = y0 === yTop;
+      const la = first && zone.searchL ? zone.searchL : [L - unitW * 0.25, L + unitW * 0.25];
+      const ra = first && zone.searchR ? zone.searchR : [R - unitW * 0.25, R + unitW * 0.25];
+      const l = findVLine(img, la[0], la[1], y0, y1, paper), r = findVLine(img, ra[0], ra[1], y0, y1, paper);
+      if (l != null) L = l; if (r != null) R = r;
+      const inset = Math.max(6, unitW * 0.06);
+      strips.push({ y0, y1, x0: Math.round(L + inset), x1: Math.round(R - inset) });
+    } else strips.push({ y0, y1, x0: Math.round(zone.x0 + 2), x1: Math.round(zone.x1 - 2) });
   }
   const stripAt = y => strips.find(s => y >= s.y0 && y <= s.y1);
 
   // 2) Mapa de tinta dentro de la columna (sin el texto impreso)
-  const excl = printedBoxes.filter(b => b.x1 > colX0 - hw && b.x0 < colX1 + hw && b.y1 > yTop).map(b => ({ x0: b.x0 - 3, y0: b.y0 - 3, x1: b.x1 + 3, y1: b.y1 + 3 }));
-  const minX = Math.min(...strips.map(s => s.x0)), maxX = Math.max(...strips.map(s => s.x1));
-  const Wm = maxX - minX + 1, Hm = img.height - yTop;
+  const excl = printedBoxes.filter(b => b.x1 > zone.x0 - unitW && b.x0 < zone.x1 + unitW && b.y1 > yTop).map(b => ({ x0: b.x0 - 3, y0: b.y0 - 3, x1: b.x1 + 3, y1: b.y1 + 3 }));
+  const minX = Math.max(0, Math.min(...strips.map(s => s.x0))), maxX = Math.min(img.width - 1, Math.max(...strips.map(s => s.x1)));
+  const Wm = Math.max(1, maxX - minX + 1), Hm = yEnd - yTop + 1;
   const dark = new Uint8Array(Wm * Hm), color = new Uint8Array(Wm * Hm), faint = new Uint8Array(Wm * Hm);
   for (let yi = 0; yi < Hm; yi++) {
     const y = yTop + yi, s = stripAt(y); if (!s) continue;
-    for (let x = s.x0; x <= s.x1; x++) {
-      if (gray(img, x, y) < paper - 40) faint[yi * Wm + x - minX] = 1; // para encontrar líneas tenues de la tabla
+    for (let x = Math.max(minX, s.x0); x <= Math.min(maxX, s.x1); x++) {
+      if (gray(img, x, y) < paper - 40) faint[yi * Wm + x - minX] = 1;
       const t = inkType(img, x, y, paper, gris); if (!t || inBoxes(x, y, excl)) continue;
       if (t === 2) color[yi * Wm + x - minX] = 1; else dark[yi * Wm + x - minX] = 1;
     }
   }
-  // 3) Líneas horizontales de la tabla: tinta negra que cruza casi todo el ancho de la columna
+  // 3) Líneas horizontales de la tabla (se ignoran)
   const win = Math.max(4, Math.round(h * 0.25));
   const cum = new Int32Array((Hm + 1) * Wm);
   for (let yi = 0; yi < Hm; yi++) for (let x = 0; x < Wm; x++) cum[(yi + 1) * Wm + x] = cum[yi * Wm + x] + faint[yi * Wm + x];
@@ -292,22 +350,45 @@ function analyzeLotColumn(img, layout, printedBoxes, gris) {
   for (let yi = 0; yi < Hm; yi++) {
     const s = stripAt(yTop + yi); if (!s) continue;
     const a = Math.max(0, yi - win), b = Math.min(Hm, yi + win + 1);
-    let cov = 0; for (let x = s.x0 - minX; x <= s.x1 - minX; x++) if (cum[b * Wm + x] - cum[a * Wm + x] > 0) cov++;
-    if (cov > (s.x1 - s.x0 + 1) * 0.9) lineRow[yi] = 1;
+    const xa = Math.max(0, s.x0 - minX), xb = Math.min(Wm - 1, s.x1 - minX);
+    let cov = 0; for (let x = xa; x <= xb; x++) if (cum[b * Wm + x] - cum[a * Wm + x] > 0) cov++;
+    if (cov > (xb - xa + 1) * 0.9) lineRow[yi] = 1;
   }
-  // Fondo de la tabla: primera línea después del último renglón
-  const lastRowEnd = rows.length ? rows[rows.length - 1].cy + rows[rows.length - 1].h : yTop;
-  let yBottom = img.height - 1;
-  for (let yi = 0; yi < Hm; yi++) if (lineRow[yi] && yTop + yi > lastRowEnd + h) { yBottom = yTop + yi - win - 2; break; }
+  // Fondo de la tabla (solo en modo automático): primera línea después del último renglón
+  let yBottom = yEnd;
+  if (!zone.y1) {
+    const lastRowEnd = rows.length ? rows[rows.length - 1].cy + rows[rows.length - 1].h : yTop + h;
+    for (let yi = 0; yi < Hm; yi++) if (lineRow[yi] && yTop + yi > lastRowEnd + h) { yBottom = yTop + yi - win - 2; break; }
+  }
   strips.forEach(s => { s.y1 = Math.min(s.y1, yBottom); });
-  while (strips.length && strips[strips.length - 1].y0 > yBottom) strips.pop();
+  while (strips.length > 1 && strips[strips.length - 1].y0 > yBottom) strips.pop();
 
-  // 4) Zonas de cada renglón dentro de la columna
+  // 4) Zonas de cada renglón
   const zones = rows.map((r, i) => {
     const next = rows[i + 1];
     return { y0: Math.max(yTop, r.cy - r.h * 1.3), y1: Math.min(yBottom, next ? next.cy - next.h * 1.3 : r.cy + r.h * 5) };
   });
-  const strikes = rows.map(r => r.lot ? strikeScore(img, r.lot) : 0);
+  // Si el lector no leyó el lote impreso de un renglón, se toma la tinta a la altura del renglón como el lote impreso
+  rows.forEach(r => {
+    if (r.lot) return;
+    // franja más cargada de tinta cerca de la altura del renglón (la foto puede venir algo inclinada)
+    const a = Math.max(yTop, Math.round(r.cy - r.h * 1.6)), b = Math.min(yBottom, Math.round(r.cy + r.h * 1.2));
+    const wh = Math.max(4, Math.round(r.h * 1.1));
+    const rs = []; for (let y = a; y <= b; y++) { const yi = y - yTop; let n = 0; if (!lineRow[yi]) for (let x = 0; x < Wm; x++) n += dark[yi * Wm + x]; rs.push(n); }
+    let best = -1, by = a;
+    for (let i = 0; i + wh <= rs.length; i++) { let sum = 0; for (let k = i; k < i + wh; k++) sum += rs[k]; if (sum > best) { best = sum; by = a + i; } }
+    if (best <= 0) return;
+    let bx0 = Infinity, bx1 = -1, by0 = Infinity, by1 = -1;
+    for (let y = Math.max(yTop, by - 3); y <= Math.min(yBottom, by + wh + 3); y++) {
+      const yi = y - yTop; if (lineRow[yi]) continue;
+      for (let x = 0; x < Wm; x++) if (dark[yi * Wm + x]) { bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x); by0 = Math.min(by0, y); by1 = Math.max(by1, y); }
+    }
+    if (bx1 > bx0 + r.h) {
+      r.inkLot = { x0: bx0 + minX, x1: bx1 + minX, y0: by0, y1: by1 };
+      for (let y = by0 - 2; y <= by1 + 2; y++) { const yi = y - yTop; if (yi < 0 || yi >= Hm) continue; for (let x = bx0; x <= bx1; x++) dark[yi * Wm + x] = 0; }
+    }
+  });
+  const strikes = rows.map(r => r.lot ? strikeScore(img, r.lot) : r.inkLot ? strikeScore(img, r.inkLot) : 0);
 
   // 5) Contar tinta por renglón y fuera de renglones
   const perRow = rows.map(() => ({ color: 0, dark: 0 }));
@@ -320,13 +401,15 @@ function analyzeLotColumn(img, layout, printedBoxes, gris) {
     else if (c + d) outside.set(y, c + d);
   }
   const minInk = Math.round(h * h * AJUSTES.minTintaFactor);
-  let extraMarks = 0, cur = 0, gap = 0, open = false;
+  // Agrupa la tinta fuera de renglones; las franjas muy delgadas son líneas de la tabla, no escritura
+  let extraMarks = 0, cur = 0, gap = 0, open = false, ys = 0, ye = 0;
+  const close = () => { if (cur >= minInk && (ye - ys + 1) >= h * 0.35) extraMarks++; cur = 0; gap = 0; open = false; };
   for (let y = yTop; y <= yBottom + 1; y++) {
     const n = outside.get(y) || 0;
-    if (n > 1) { cur += n; gap = 0; open = true; }
-    else if (open && ++gap > h * 2) { if (cur >= minInk) extraMarks++; cur = 0; gap = 0; open = false; }
+    if (n > 1) { if (!open) ys = y; ye = y; cur += n; gap = 0; open = true; }
+    else if (open && ++gap > h * 2) close();
   }
-  if (open && cur >= minInk) extraMarks++;
+  if (open) close();
 
   const results = rows.map((r, i) => {
     const reasons = [];
@@ -334,10 +417,11 @@ function analyzeLotColumn(img, layout, printedBoxes, gris) {
     if (strikes[i] >= AJUSTES.rayaFraccion) reasons.push('lote tachado');
     if (perRow[i].dark >= minInk) reasons.push('escritura a mano');
     let estado = reasons.length ? 'cambio' : 'ok';
-    if (estado === 'ok' && (!r.lot || r.lot.conf < AJUSTES.confBaja)) { estado = 'revisar'; reasons.push(r.lot ? 'lote impreso poco legible' : 'no se encontró el lote impreso'); }
+    if (estado === 'ok' && !r.lot && !r.inkLot) { estado = 'revisar'; reasons.push('no se encontró el lote impreso'); }
+    else if (estado === 'ok' && r.lot && r.lot.conf < AJUSTES.confBaja) { estado = 'revisar'; reasons.push('lote impreso poco legible'); }
     const z = zones[i], s0 = stripAt(Math.round((z.y0 + z.y1) / 2)) || strips[0];
     const cell = clampBox(img, { x0: s0.x0 - 4, y0: z.y0, x1: s0.x1 + 4, y1: z.y1 });
-    return { linea: i + 1, item: r.item, impreso: r.lot ? r.lot.t : '', estado, reasons, cell,
+    return { linea: i + 1, item: r.item, impreso: r.lot ? r.lot.lot : '', estado, reasons, cell,
       lotBox: r.lot ? { x0: r.lot.x0, y0: r.lot.y0, x1: r.lot.x1, y1: r.lot.y1 } : null, nuevo: null,
       debug: { color: perRow[i].color, dark: perRow[i].dark, strike: +strikes[i].toFixed(2), minInk } };
   });
@@ -426,39 +510,70 @@ async function readHandwritten(w, canvas, cell, printedBox) {
   }
 }
 
-// Lee la hoja; si no encuentra la tabla, prueba girándola
-async function ocrWithRotation(w, canvas) {
+// Lee la hoja; si no encuentra la columna de lote, prueba girándola
+async function ocrWithRotation(w, canvas, manual) {
   let best = null;
-  for (const deg of [0, 180, 90, 270]) {
+  for (const deg of manual ? [0] : [0, 180, 90, 270]) {
     const c = deg ? rotate(canvas, deg) : canvas;
     const { data } = await w.recognize(c);
     const img = c.getContext('2d').getImageData(0, 0, c.width, c.height);
-    const layout = findLayout(data.words || [], img);
-    const score = layout ? layout.rows.length + (layout.rows.some(r => r.lot) ? 1 : 0) : 0;
-    if (!best || score > best.score) best = { canvas: c, img, data, layout, score, deg };
-    if (layout && layout.rows.length) break; // columna LOT-NO encontrada
+    const Z = findZone(data.words || [], img, manual);
+    const score = Z ? 1 + Z.rows.length : 0;
+    if (!best || score > best.score) best = { canvas: c, img, data, Z, score, deg };
+    if (Z && (Z.rows.length || Z.method !== 'numeros')) break;
   }
   return best;
 }
 
-async function analyzePage(canvas, label) {
+// Zona de lote marcada a mano (se guarda en el navegador)
+let zonaGuardada = null, usarSiempre = false;
+async function loadZona() {
+  try {
+    const z = await DB.get('zonaManual');
+    zonaGuardada = z && z.x1 > z.x0 && z.y1 > z.y0 ? z : null;
+    usarSiempre = zonaGuardada ? (await DB.get('usarSiempreZona')) === true : false;
+  } catch (e) {}
+  renderZonaInfo();
+}
+function renderZonaInfo() {
+  const el = $('zonaInfo'); if (!el) return;
+  el.innerHTML = zonaGuardada
+    ? `📐 Hay una columna de lote marcada a mano${usarSiempre ? ' (se usa <b>siempre</b>)' : ' (se usa solo si no se encuentra sola)'}. <button class="linkbtn" id="zonaDel">Borrarla</button>`
+    : '';
+  const d = $('zonaDel'); if (d) d.onclick = async () => { zonaGuardada = null; usarSiempre = false; await DB.set('zonaManual', null); await DB.set('usarSiempreZona', false); renderZonaInfo(); };
+}
+
+async function analyzePage(canvas, label, opts = {}) {
   const w = await getWorker();
-  const { canvas: cv, img, data, layout, deg } = await ocrWithRotation(w, canvas);
+  let manual = opts.manual || (usarSiempre && zonaGuardada) || null;
+  let ocr = opts.cache && manual ? null : await ocrWithRotation(w, canvas, manual);
+  // Si no se encontró sola, usar la zona marcada a mano (si existe)
+  if ((!ocr || !ocr.Z) && !manual && zonaGuardada) { manual = zonaGuardada; ocr = await ocrWithRotation(w, canvas, manual); }
+  if (opts.cache && opts.manual) {
+    const { canvas: c, img, data, deg } = opts.cache;
+    ocr = { canvas: c, img, data, deg, Z: findZone(data.words || [], img, opts.manual) };
+  }
+  const { canvas: cv, img, data, Z, deg } = ocr;
   const text = (data.text || '').toUpperCase();
   const mo = (text.match(/MO\s*N[O0]\s*[:.]?\s*(\d{5,})/) || [])[1] || '';
   const gris = isGrayscale(img);
-  if (!layout || !layout.rows.length) {
-    return { label, mo, results: [], extraMarks: 0, mode: 'sinColumna', gris, deg, canvas: cv, strips: [] };
-  }
+  const diag = {
+    metodo: Z ? { manual: 'zona marcada a mano', encabezado: 'encabezado LOT-NO', numeros: 'números de lote en la zona de materiales' }[Z.method] : 'no se encontró',
+    lotes: Z ? Z.lotsRead : [], palabras: (data.words || []).length,
+    candidatos: (data.words || []).map(x => lotCandidate(x.text)).filter(Boolean),
+    texto: (data.text || '').replace(/\s+/g, ' ').slice(0, 400)
+  };
+  const cache = { canvas: cv, img, data, deg };
+  if (!Z) return { label, mo, results: [], extraMarks: 0, mode: 'sinColumna', gris, deg, canvas: cv, strips: [], diag, cache };
   const printed = (data.words || []).map(x => x.bbox);
-  const { results, extraMarks, strips } = analyzeLotColumn(img, layout, printed, gris);
+  const { results, extraMarks, strips } = analyzeLotColumn(img, Z, printed, gris);
   for (const r of results.filter(r => r.estado === 'cambio')) {
     try { const n = await readHandwritten(w, cv, r.cell, r.lotBox); if (n && n !== r.impreso) r.nuevo = n; } catch (e) {}
   }
-  return { label, mo, results, extraMarks, mode: 'columna', gris, deg, canvas: cv, strips };
+  return { label, mo, results, extraMarks, mode: Z.method, gris, deg, canvas: cv, strips, diag, cache };
 }
 
-let busy = false;
+let busy = false, lastAll = [];
 async function processFiles(files, origen = 'manual') {
   if (busy) { $('status').textContent = 'Espera a que termine la revisión actual…'; return; }
   busy = true;
@@ -472,16 +587,17 @@ async function processFiles(files, origen = 'manual') {
         else pages.push({ canvas: await imageToCanvas(f), label: f.name || 'Foto' });
       } catch (e) { $('status').textContent = '⚠️ No se pudo abrir ' + f.name; }
     }
-    const all = [];
+    lastAll = [];
     for (let i = 0; i < pages.length; i++) {
       progBase = i / pages.length; progSpan = 1 / pages.length;
       setProg(progBase, `Revisando hoja ${i + 1} de ${pages.length}…`);
       const res = await analyzePage(pages[i].canvas, pages[i].label);
-      all.push(res); renderPage(res); await saveToHist(res, origen);
+      res.origen = origen;
+      lastAll.push(res); $('results').appendChild(renderPage(res)); res.recId = await saveToHist(res, origen);
     }
-    if (all.length) {
-      renderSummary(all);
-      alarm(all.some(r => r.results.some(x => x.estado === 'cambio') || r.extraMarks));
+    if (lastAll.length) {
+      renderSummary(lastAll);
+      alarm(lastAll.some(r => r.results.some(x => x.estado === 'cambio') || r.extraMarks));
     }
     $('status').textContent = `Listo. ${pages.length} hoja(s) revisada(s) y guardada(s) en el registro.`;
   } catch (err) {
@@ -491,6 +607,57 @@ async function processFiles(files, origen = 'manual') {
   busy = false;
 }
 
+// Volver a revisar una hoja con la zona marcada a mano
+async function reanalyzeWithZone(res, zona) {
+  if (busy) return; busy = true;
+  setProg(0.5, 'Revisando la columna marcada…');
+  try {
+    const nres = await analyzePage(res.cache.canvas, res.label, { manual: zona, cache: res.cache });
+    nres.origen = res.origen;
+    if (res.recId) { try { await DB.del(res.recId); } catch (e) {} }
+    nres.recId = await saveToHist(nres, res.origen);
+    const i = lastAll.indexOf(res); if (i >= 0) lastAll[i] = nres;
+    res.card.replaceWith(renderPage(nres));
+    renderSummary(lastAll);
+    alarm(nres.results.some(x => x.estado === 'cambio') || nres.extraMarks);
+    $('status').textContent = 'Listo. Hoja revisada con la columna marcada.';
+  } catch (e) { $('status').textContent = '⚠️ ' + (e.message || 'No se pudo revisar.'); }
+  $('prog').classList.add('hidden'); busy = false;
+}
+
+// Ventana para marcar la columna con el dedo o el mouse
+function openZonePicker(res) {
+  const m = $('zoneModal'), cv = $('zoneCanvas'), src = res.cache.canvas;
+  cv.width = src.width; cv.height = src.height;
+  const g = cv.getContext('2d');
+  let rect = zonaGuardada ? { x0: zonaGuardada.x0 * cv.width, y0: zonaGuardada.y0 * cv.height, x1: zonaGuardada.x1 * cv.width, y1: zonaGuardada.y1 * cv.height } : null;
+  const draw = () => {
+    g.drawImage(src, 0, 0);
+    if (rect) {
+      g.fillStyle = 'rgba(37,99,235,.15)'; g.strokeStyle = '#2563eb'; g.lineWidth = Math.max(4, cv.width / 300);
+      const x = Math.min(rect.x0, rect.x1), y = Math.min(rect.y0, rect.y1), w = Math.abs(rect.x1 - rect.x0), h = Math.abs(rect.y1 - rect.y0);
+      g.fillRect(x, y, w, h); g.strokeRect(x, y, w, h);
+    }
+  };
+  const pos = e => { const b = cv.getBoundingClientRect(); return { x: (e.clientX - b.left) * cv.width / b.width, y: (e.clientY - b.top) * cv.height / b.height }; };
+  let down = false;
+  cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId); down = true; const p = pos(e); rect = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; draw(); };
+  cv.onpointermove = e => { if (!down) return; const p = pos(e); rect.x1 = p.x; rect.y1 = p.y; draw(); };
+  cv.onpointerup = () => { down = false; };
+  $('zoneAlways').checked = usarSiempre;
+  $('zoneCancel').onclick = () => m.classList.add('hidden');
+  $('zoneOk').onclick = async () => {
+    if (!rect || Math.abs(rect.x1 - rect.x0) < 20 || Math.abs(rect.y1 - rect.y0) < 20) { $('zoneMsg').textContent = 'Dibuja un rectángulo sobre la columna de lote.'; return; }
+    const z = { x0: Math.min(rect.x0, rect.x1) / cv.width, x1: Math.max(rect.x0, rect.x1) / cv.width, y0: Math.min(rect.y0, rect.y1) / cv.height, y1: Math.max(rect.y0, rect.y1) / cv.height };
+    zonaGuardada = z; usarSiempre = $('zoneAlways').checked;
+    await DB.set('zonaManual', z); await DB.set('usarSiempreZona', usarSiempre); renderZonaInfo();
+    m.classList.add('hidden');
+    reanalyzeWithZone(res, z);
+  };
+  $('zoneMsg').textContent = '';
+  m.classList.remove('hidden'); draw();
+}
+
 // =====================================================================
 //  PANTALLA
 // =====================================================================
@@ -498,28 +665,30 @@ function renderSummary(all) {
   const tot = all.reduce((s, r) => s + r.results.filter(x => x.estado === 'cambio').length + r.extraMarks, 0);
   const b = $('sumBanner'); $('sumCard').classList.remove('hidden');
   const sinCol = all.filter(r => r.mode === 'sinColumna').length;
-  if (tot) { b.className = 'banner bad'; b.innerHTML = `⚠️ ${tot} CAMBIO${tot > 1 ? 'S' : ''} DE LOTE<small>en ${all.length} hoja(s) revisada(s)${sinCol ? ` · ${sinCol} no se pudo(ieron) leer` : ''}</small>`; }
-  else if (sinCol) { b.className = 'banner warn'; b.innerHTML = `NO SE PUDO REVISAR<small>${sinCol} de ${all.length} hoja(s): no se encontró la columna LOT-NO. Toma la foto otra vez.</small>`; }
+  if (tot) { b.className = 'banner bad'; b.innerHTML = `⚠️ ${tot} CAMBIO${tot > 1 ? 'S' : ''} DE LOTE<small>en ${all.length} hoja(s) revisada(s)${sinCol ? ` · ${sinCol} sin revisar` : ''}</small>`; }
+  else if (sinCol) { b.className = 'banner warn'; b.innerHTML = `NO SE PUDO REVISAR<small>${sinCol} de ${all.length} hoja(s): no se encontró la columna de lote. Usa "Marcar la columna de lote a mano".</small>`; }
   else { b.className = 'banner ok'; b.innerHTML = `✅ SIN CAMBIOS DE LOTE<small>${all.length} hoja(s) revisada(s)</small>`; }
   try { navigator.vibrate && navigator.vibrate(tot ? [150, 80, 150] : 60); } catch (e) {}
 }
 
-function renderPage({ label, mo, results, extraMarks, mode, gris, deg, canvas, strips }) {
+function renderPage(res) {
+  const { label, mo, results, extraMarks, mode, gris, deg, canvas, strips, diag } = res;
   const cambios = results.filter(r => r.estado === 'cambio');
   const revisar = results.filter(r => r.estado === 'revisar');
   const total = cambios.length + extraMarks;
-  const card = document.createElement('div'); card.className = 'card';
+  const card = document.createElement('div'); card.className = 'card'; res.card = card;
   let cls, head;
   if (total) { cls = 'bad'; head = `⚠️ ${total} cambio${total > 1 ? 's' : ''} de lote`; }
-  else if (mode === 'sinColumna') { cls = 'warn'; head = 'No se encontró la columna LOT-NO'; }
+  else if (mode === 'sinColumna') { cls = 'warn'; head = 'No se encontró la columna de lote'; }
   else if (revisar.length) { cls = 'warn'; head = `Revisar ${revisar.length} línea(s)`; }
   else { cls = 'ok'; head = '✅ Sin cambios de lote'; }
   const notes = [];
   if (gris) notes.push('⚠️ El archivo está en blanco y negro: no se puede detectar pluma de color. Configura el escáner en COLOR.');
   if (deg) notes.push(`La hoja venía girada ${deg}°; se enderezó automáticamente.`);
-  if (mode === 'sinColumna') notes.push('No se leyó el encabezado LOT-NO ni las líneas del Kit List. Toma la foto otra vez: de frente, con la hoja completa y buena luz.');
+  if (mode === 'sinColumna') notes.push('No se pudieron leer los números de lote. Toca "Marcar la columna de lote a mano" y dibuja un rectángulo sobre la columna LOT-NO.');
+  if (mode !== 'sinColumna' && !results.length) notes.push('Se revisó la columna, pero no se leyeron los renglones: el resultado cuenta las correcciones encontradas en toda la columna.');
   let html = `<h2>${esc(label)}${mo ? ' · MO ' + esc(mo) : ''}</h2>
-    <div class="banner ${cls}" style="font-size:19px">${head}<small>${results.length} línea(s) leídas</small></div>
+    <div class="banner ${cls}" style="font-size:19px">${head}<small>${results.length} línea(s) leídas · columna encontrada por: ${esc(diag.metodo)}</small></div>
     ${notes.map(n => `<p class="meta">${esc(n)}</p>`).join('')}`;
   cambios.forEach(r => {
     html += `<div class="alert bad" style="margin-top:10px">
@@ -528,26 +697,33 @@ function renderPage({ label, mo, results, extraMarks, mode, gris, deg, canvas, s
       <div class="meta">Detectado por: ${esc(r.reasons.join(', '))}</div>
       <img src="${crop(canvas, r.cell).toDataURL('image/jpeg', 0.75)}" alt="Celda de lote línea ${r.linea}"></div>`;
   });
-  if (extraMarks) html += `<div class="alert bad" style="margin-top:10px"><b>⚠️ ${extraMarks} marca(s) de corrección sin línea identificada</b><div class="meta">Hay escritura en la columna LOT-NO que no se pudo asociar a una línea. Revisa la hoja.</div></div>`;
+  if (extraMarks) html += `<div class="alert bad" style="margin-top:10px"><b>⚠️ ${extraMarks} corrección(es) en la columna de lote${results.length ? ' sin línea identificada' : ''}</b><div class="meta">Hay escritura o tachones en la columna de lote. Revisa la hoja.</div></div>`;
   revisar.forEach(r => { html += `<div class="alert warn" style="margin-top:10px"><b>Revisar línea ${r.linea}${r.item ? ' · ' + esc(r.item) : ''}</b><div class="meta">${esc(r.reasons.join(', '))}</div><img src="${crop(canvas, r.cell).toDataURL('image/jpeg', 0.75)}" alt=""></div>`; });
-  html += `<details style="margin-top:10px"><summary class="meta">Ver hoja marcada (🟦 zona revisada · 🟥 cambio · 🟧 revisar · 🟩 sin cambio)</summary><canvas class="annot"></canvas></details>`;
+  html += `<button class="btn light zonebtn">✏️ Marcar la columna de lote a mano</button>`;
+  if (strips && strips.length) html += `<details style="margin-top:10px"><summary class="meta">Ver hoja marcada (🟦 zona revisada · 🟥 cambio · 🟧 revisar · 🟩 sin cambio)</summary><canvas class="annot"></canvas></details>`;
+  html += `<details style="margin-top:6px"><summary class="meta">Diagnóstico de lectura</summary><div class="meta" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all">
+    Columna encontrada por: ${esc(diag.metodo)}<br>Palabras leídas: ${diag.palabras}<br>
+    Números tipo lote en la hoja: ${esc(diag.candidatos.join(', ') || 'ninguno')}<br>
+    Lotes dentro de la columna: ${esc(diag.lotes.join(', ') || 'ninguno')}<br>Texto leído: ${esc(diag.texto)}</div></details>`;
   card.innerHTML = html;
-  $('results').appendChild(card);
+  card.querySelector('.zonebtn').onclick = () => openZonePicker(res);
 
-  const out = card.querySelector('canvas.annot'); out.width = canvas.width; out.height = canvas.height;
-  const g = out.getContext('2d'); g.drawImage(canvas, 0, 0);
-  g.lineWidth = Math.max(3, canvas.width / 400); g.font = `bold ${Math.round(canvas.width / 45)}px system-ui`;
-  if (strips && strips.length) {
+  const out = card.querySelector('canvas.annot');
+  if (out) {
+    out.width = canvas.width; out.height = canvas.height;
+    const g = out.getContext('2d'); g.drawImage(canvas, 0, 0);
+    g.lineWidth = Math.max(3, canvas.width / 400); g.font = `bold ${Math.round(canvas.width / 45)}px system-ui`;
     g.strokeStyle = '#2563eb'; g.setLineDash([12, 8]); g.beginPath();
     strips.forEach((s, i) => { if (i === 0) g.moveTo(s.x0, s.y0); g.lineTo(s.x0, s.y1); });
     for (let i = strips.length - 1; i >= 0; i--) { g.lineTo(strips[i].x1, strips[i].y1); g.lineTo(strips[i].x1, strips[i].y0); }
     g.closePath(); g.stroke(); g.setLineDash([]);
+    results.forEach(r => {
+      g.strokeStyle = g.fillStyle = r.estado === 'cambio' ? '#e11d48' : r.estado === 'revisar' ? '#f59e0b' : '#16a34a';
+      g.strokeRect(r.cell.x0, r.cell.y0, r.cell.x1 - r.cell.x0, r.cell.y1 - r.cell.y0);
+      g.fillText(String(r.linea), r.cell.x1 + 6, r.cell.y0 + canvas.width / 45);
+    });
   }
-  results.forEach(r => {
-    g.strokeStyle = g.fillStyle = r.estado === 'cambio' ? '#e11d48' : r.estado === 'revisar' ? '#f59e0b' : '#16a34a';
-    g.strokeRect(r.cell.x0, r.cell.y0, r.cell.x1 - r.cell.x0, r.cell.y1 - r.cell.y0);
-    g.fillText(String(r.linea), r.cell.x1 + 6, r.cell.y0 + canvas.width / 45);
-  });
+  return card;
 }
 
 // =====================================================================
@@ -566,12 +742,13 @@ const DB = {
   },
   async tx(store, mode, fn) {
     const d = await this.open();
-    return new Promise((res, rej) => { const t = d.transaction(store, mode); const out = fn(t.objectStore(store)); t.oncomplete = () => res(out && out.result !== undefined ? out.result : out); t.onerror = () => rej(t.error); });
+    return new Promise((res, rej) => { const t = d.transaction(store, mode); const out = fn(t.objectStore(store)); t.oncomplete = () => res(out instanceof IDBRequest ? out.result : out); t.onerror = () => rej(t.error); });
   },
   add: rec => DB.tx('scans', 'readwrite', s => s.add(rec)),
   put: rec => DB.tx('scans', 'readwrite', s => s.put(rec)),
   all: () => DB.tx('scans', 'readonly', s => s.getAll()),
   clear: () => DB.tx('scans', 'readwrite', s => s.clear()),
+  del: id => DB.tx('scans', 'readwrite', s => s.delete(id)),
   get: k => DB.tx('kv', 'readonly', s => s.get(k)),
   set: (k, v) => DB.tx('kv', 'readwrite', s => s.put(v, k))
 };
@@ -586,14 +763,16 @@ function smallCrop(canvas, cell) {
 async function saveToHist({ label, mo, results, extraMarks, canvas, gris }, origen) {
   const cambios = results.filter(r => r.estado === 'cambio');
   const total = cambios.length + extraMarks;
+  let id = null;
   try {
-    await DB.add({
+    id = await DB.add({
       fecha: new Date().toISOString(), hoja: label, mo, origen, gris, total, lineas: results.length, sinLinea: extraMarks,
       atendido: total ? false : true, atendidoFecha: null,
       cambios: cambios.map(r => ({ linea: r.linea, item: r.item, impreso: r.impreso, nuevo: r.nuevo || '', motivo: r.reasons.join(', '), img: smallCrop(canvas, r.cell) }))
     });
   } catch (e) { console.log('No se pudo guardar', e); }
   refreshRegistro();
+  return id;
 }
 
 const fmt = iso => { try { return new Date(iso).toLocaleString(); } catch (e) { return iso; } };
@@ -755,6 +934,7 @@ const drop = $('drop');
 drop.addEventListener('drop', e => { const fs = [...e.dataTransfer.files].filter(f => /^image\//.test(f.type) || /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name)); if (fs.length) processFiles(fs); });
 initScanner();
 refreshRegistro();
+loadZona();
 </script>
 </body>
 </html>
